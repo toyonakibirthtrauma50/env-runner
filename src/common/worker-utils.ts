@@ -1,9 +1,20 @@
 import type { ServerOptions, Server } from "srvx";
 
+export interface AppEntryIPCContext {
+  sendMessage: (message: unknown) => void;
+}
+
+export interface AppEntryIPC {
+  onOpen?: (ctx: AppEntryIPCContext) => void | Promise<void>;
+  onMessage?: (message: unknown) => void | Promise<void>;
+  onClose?: () => void | Promise<void>;
+}
+
 export interface AppEntry {
   fetch: ServerOptions["fetch"];
   middleware?: ServerOptions["middleware"];
   plugins?: ServerOptions["plugins"];
+  ipc?: AppEntryIPC;
 }
 
 export async function resolveEntry(entryPath: string): Promise<AppEntry> {

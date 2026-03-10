@@ -17,18 +17,30 @@ const server = serve({
 
 await server.ready();
 
+if (entry.ipc) {
+  await entry.ipc.onOpen?.({
+    sendMessage: (message) => parentPort?.postMessage(message),
+  });
+}
+
 parentPort?.postMessage({
   address: parseServerAddress(server),
 });
 
 parentPort?.on("message", (message) => {
   if (message?.event === "shutdown") {
-    server.close().then(() => {
-      parentPort?.postMessage({ event: "exit" });
-    });
+    Promise.resolve(entry.ipc?.onClose?.())
+      .then(() => server.close())
+      .then(() => {
+        parentPort?.postMessage({ event: "exit" });
+      });
+    return;
   }
 
   if (message?.type === "ping") {
     parentPort?.postMessage({ type: "pong", data: message.data });
+    return;
   }
+
+  entry.ipc?.onMessage?.(message);
 });

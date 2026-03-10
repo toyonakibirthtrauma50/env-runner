@@ -1,4 +1,7 @@
+import type { AppEntry } from "../../src/common/worker-utils.ts";
 import { runtime } from "std-env";
+
+let sendMessage: ((message: unknown) => void) | undefined;
 
 export default {
   fetch(request: Request): Response | Promise<Response> {
@@ -18,4 +21,18 @@ export default {
 
     return new Response("ok");
   },
-};
+  ipc: {
+    onOpen(ctx) {
+      sendMessage = ctx.sendMessage;
+      sendMessage({ type: "ipc:opened" });
+    },
+    onMessage(message: any) {
+      if (message?.type === "echo") {
+        sendMessage?.({ type: "echo-reply", data: message.data });
+      }
+    },
+    onClose() {
+      sendMessage = undefined;
+    },
+  },
+} satisfies AppEntry;

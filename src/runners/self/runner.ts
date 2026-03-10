@@ -31,7 +31,9 @@ export class SelfEnvRunner extends BaseEnvRunner {
     // Handle ping/pong internally (no worker to relay to)
     if ((message as any)?.type === "ping") {
       queueMicrotask(() => this._handleMessage({ type: "pong", data: (message as any).data }));
+      return;
     }
+    this.#entry?.ipc?.onMessage?.(message);
   }
 
   // #region Protected methods
@@ -49,6 +51,7 @@ export class SelfEnvRunner extends BaseEnvRunner {
       return;
     }
     this.#active = false;
+    await this.#entry?.ipc?.onClose?.();
     this.#entry = undefined;
   }
 
@@ -64,8 +67,13 @@ export class SelfEnvRunner extends BaseEnvRunner {
     }
     this.#active = true;
     resolveEntry(entryPath)
-      .then((entry) => {
+      .then(async (entry) => {
         this.#entry = entry;
+        await entry.ipc?.onOpen?.({
+          sendMessage: (message) => {
+            queueMicrotask(() => this._handleMessage(message));
+          },
+        });
         // Signal ready with a dummy address (fetch is overridden, address unused)
         this._handleMessage({ address: { host: "127.0.0.1", port: 0 } });
       })

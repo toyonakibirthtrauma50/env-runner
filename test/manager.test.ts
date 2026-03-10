@@ -2,7 +2,8 @@ import { fileURLToPath } from "node:url";
 import { resolve, dirname } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { EnvRunner } from "../src/index.ts";
-import { NodeWorkerEnvRunner, RunnerManager } from "../src/index.ts";
+import { RunnerManager } from "../src/index.ts";
+import { NodeWorkerEnvRunner } from "../src/runners/node-worker/runner.ts";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 const workerEntry = resolve(_dir, "../src/runners/node-worker/worker.ts");

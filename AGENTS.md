@@ -2,6 +2,8 @@
 
 Generic environment runner for Node.js. Ported from the nitro env runner concept into a standalone package.
 
+> **Note:** Keep `AGENTS.md` updated with project status and structure.
+
 > **Note:** Keep `README.md` usage section updated when adding/changing public API, CLI flags, or runner behavior.
 
 ## Architecture
@@ -33,7 +35,7 @@ src/
 
 - **`src/types.ts`** — Core interfaces: `EnvRunner`, `WorkerAddress`, `WorkerHooks`, `RunnerRPCHooks`
 - **`src/common/base-runner.ts`** — `BaseEnvRunner` abstract class + `EnvRunnerData`: shared logic for all runners (fetch proxy with exponential backoff, upgrade, message dispatch, graceful shutdown, socket cleanup)
-- **`src/common/worker-utils.ts`** — Shared utilities for built-in workers: `AppEntry` interface, `resolveEntry()` to dynamically import user entry, `parseServerAddress()` to extract host/port from srvx server
+- **`src/common/worker-utils.ts`** — Shared utilities for built-in workers: `AppEntry` interface (with optional `ipc` hooks), `AppEntryIPC`/`AppEntryIPCContext` types, `resolveEntry()` to dynamically import user entry, `parseServerAddress()` to extract host/port from srvx server
 - **`src/runners/node-worker/runner.ts`** — `NodeWorkerEnvRunner` extends `BaseEnvRunner`: spawns Node.js Worker threads, data via `workerData`
 - **`src/runners/node-worker/worker.ts`** — Built-in srvx worker: reads `data.entry` from `workerData`, starts srvx server, reports address via `parentPort`
 - **`src/runners/node-process/runner.ts`** — `NodeProcessEnvRunner` extends `BaseEnvRunner`: spawns a child process via `fork()`, supports custom `execArgv`
@@ -109,8 +111,19 @@ export default {
   },
   middleware?: [],  // Optional srvx middleware
   plugins?: [],     // Optional srvx plugins
+  ipc?: {
+    onOpen?: (ctx: { sendMessage: (message: unknown) => void }) => void,
+    onMessage?: (message: unknown) => void,
+    onClose?: () => void,
+  },
 };
 ```
+
+The `ipc` property enables bidirectional messaging between the entry and the runner:
+
+- `onOpen` — Called when the IPC channel is established (before ready signal), receives a `{ sendMessage }` context for sending messages back to the runner
+- `onMessage` — Called when the runner sends a user message (internal messages like ping/pong and shutdown are filtered out)
+- `onClose` — Called when the runner is shutting down
 
 ### Usage
 
@@ -138,8 +151,10 @@ const runner2 = new NodeProcessEnvRunner({
 1. Worker receives `data.entry` path (via `workerData` or `ENV_RUNNER_DATA`)
 2. Dynamically imports the user's entry module (`resolveEntry()`)
 3. Starts a srvx server with `port: 0` on `127.0.0.1`
-4. Reports `{ address: { host, port } }` via IPC
-5. Handles `shutdown`/`exit` protocol and ping/pong messaging
+4. Calls `entry.ipc.onOpen()` with `{ sendMessage }` if IPC hooks are defined
+5. Reports `{ address: { host, port } }` via IPC
+6. Forwards user messages to `entry.ipc.onMessage()` (filters out internal ping/pong and shutdown)
+7. Calls `entry.ipc.onClose()` on shutdown before closing the server
 
 ### Worker ↔ Runner mapping
 

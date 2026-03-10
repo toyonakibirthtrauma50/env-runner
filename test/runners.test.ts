@@ -3,12 +3,11 @@ import { fileURLToPath } from "node:url";
 import { resolve, dirname } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { EnvRunner } from "../src/index.ts";
-import {
-  NodeWorkerEnvRunner,
-  NodeProcessEnvRunner,
-  BunProcessEnvRunner,
-  SelfEnvRunner,
-} from "../src/index.ts";
+
+import { NodeWorkerEnvRunner } from "../src/runners/node-worker/runner.ts";
+import { NodeProcessEnvRunner } from "../src/runners/node-process/runner.ts";
+import { BunProcessEnvRunner } from "../src/runners/bun-process/runner.ts";
+import { SelfEnvRunner } from "../src/runners/self/runner.ts";
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 const appEntry = resolve(_dir, "./fixtures/app.ts");
@@ -160,6 +159,38 @@ for (const { name, create } of runners) {
       });
       const res = await runner.fetch("http://localhost/");
       expect(res.status).toBe(503);
+    });
+
+    it("ipc.onOpen sends message on ready", async () => {
+      runner = create(opts("test-ipc-open"));
+      // Register listener before ready since onOpen fires before the address message
+      const opened = new Promise<unknown>((resolve) => {
+        runner!.onMessage((msg: any) => {
+          if (msg?.type === "ipc:opened") {
+            resolve(msg);
+          }
+        });
+      });
+      await waitForReady(runner!);
+      const msg = await opened;
+      expect(msg).toEqual({ type: "ipc:opened" });
+    });
+
+    it("ipc.onMessage receives and replies", async () => {
+      runner = create(opts("test-ipc-msg"));
+      // Register reply listener before ready to not miss any messages
+      const reply = new Promise<unknown>((resolve) => {
+        runner!.onMessage((msg: any) => {
+          if (msg?.type === "echo-reply") {
+            resolve(msg);
+          }
+        });
+      });
+      await waitForReady(runner!);
+
+      runner!.sendMessage({ type: "echo", data: "hello-ipc" });
+      const msg: any = await reply;
+      expect(msg).toEqual({ type: "echo-reply", data: "hello-ipc" });
     });
 
     it("inspect returns formatted string", async () => {

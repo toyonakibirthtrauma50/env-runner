@@ -179,6 +179,19 @@ export default {
   },
   middleware: [], // Optional srvx middleware
   plugins: [], // Optional srvx plugins
+  ipc: {
+    onOpen({ sendMessage }) {
+      // IPC channel is ready — send messages back to the runner
+      sendMessage({ type: "hello", from: "worker" });
+    },
+    onMessage(message) {
+      // Receive messages from the runner
+      console.log("Got message:", message);
+    },
+    onClose() {
+      // Runner is shutting down
+    },
+  },
 };
 ```
 
