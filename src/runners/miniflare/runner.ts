@@ -95,6 +95,7 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
     const entryPath = this._data?.entry as string | undefined;
 
     const options: Record<string, unknown> = {
+      compatibilityDate: new Date().toISOString().split("T")[0],
       modules: true,
       ...this.#miniflareOptions,
     };

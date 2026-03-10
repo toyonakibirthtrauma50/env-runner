@@ -54,7 +54,7 @@ const runners = [
     name: "MiniflareEnvRunner",
     create: (opts: any) => new MiniflareEnvRunner(opts),
     skipWorkerEntry: true,
-    extraOpts: { miniflareOptions: { compatibilityDate: "2024-01-01" } },
+    extraOpts: {},
   },
 ];
 

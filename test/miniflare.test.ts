@@ -20,7 +20,6 @@ describe("MiniflareEnvRunner (custom exports)", () => {
       name: "test-do",
       data: { entry: workerDoEntry },
       miniflareOptions: {
-        compatibilityDate: "2024-01-01",
         durableObjects: {
           COUNTER: "Counter",
         },
@@ -49,7 +48,6 @@ describe("MiniflareEnvRunner (custom exports)", () => {
       name: "test-do-ipc",
       data: { entry: workerDoEntry },
       miniflareOptions: {
-        compatibilityDate: "2024-01-01",
         durableObjects: {
           COUNTER: "Counter",
         },
