@@ -178,7 +178,6 @@ export abstract class BaseEnvRunner implements EnvRunner {
     this._address = undefined;
   }
 
-
   // #endregion
 
   // #region Abstract methods
