@@ -167,7 +167,7 @@ await runner.close();
 | `BunProcessEnvRunner`  | Bun or Node.js process         | `Bun.spawn` IPC or `fork()`         |
 | `DenoProcessEnvRunner` | Deno process                   | `deno run` with IPC channel         |
 | `SelfEnvRunner`        | In-process                     | In-memory channel                   |
-| `MiniflareEnvRunner`   | Cloudflare Workers (miniflare) | `serviceBindings` + `dispatchFetch` |
+| `MiniflareEnvRunner`   | Cloudflare Workers (miniflare) | WebSocket pair via `dispatchFetch`   |
 
 #### Miniflare Runner
 
@@ -194,6 +194,29 @@ await runner.close();
 ```
 
 The `miniflareOptions` object is passed directly to the [Miniflare constructor](https://developers.cloudflare.com/workers/testing/miniflare/) — you can configure bindings, KV, D1, Durable Objects, and any other Miniflare option.
+
+#### Module Transform Pipeline
+
+Pass a `transformRequest` callback to route module resolution through Vite's (or any) transform pipeline. This enables TS, JSX, and other non-JS formats to be compiled on-the-fly inside the Workers runtime without pre-bundling:
+
+```ts
+import { MiniflareEnvRunner } from "env-runner/runners/miniflare";
+
+const runner = new MiniflareEnvRunner({
+  name: "my-worker",
+  data: { entry: "./worker.ts" },
+  // Route module resolution through Vite's transform pipeline
+  transformRequest: (id) => viteDevEnvironment.transformRequest(id),
+});
+```
+
+When `transformRequest` is provided:
+
+- The `unsafeModuleFallbackService` calls it with the resolved file path before falling back to raw disk reads
+- Module rules for `.ts`, `.tsx`, `.jsx`, and `.mts` are added automatically
+- Static `export *` re-exports are skipped in the wrapper to avoid miniflare's ModuleLocator pre-walking the import tree
+
+The callback should return `{ code: string }` for transformed modules, or `null`/`undefined` to fall back to the default raw file read.
 
 ### Vite Environment API
 
@@ -223,6 +246,21 @@ const runner = new ModuleRunner({ transport, sourcemapInterceptor: "prepareStack
 ```
 
 Messages are namespaced by environment name, so multiple Vite environments can share a single runner's IPC channel.
+
+**Miniflare + Vite** — combine `MiniflareEnvRunner.transformRequest` with Vite helpers for a full Cloudflare Workers dev environment with HMR and on-the-fly transforms:
+
+```ts
+import { MiniflareEnvRunner } from "env-runner/runners/miniflare";
+import { createViteHotChannel } from "env-runner/vite";
+
+const runner = new MiniflareEnvRunner({
+  name: "worker",
+  data: { entry: "./src/worker.ts" },
+  transformRequest: (id) => devEnvironment.transformRequest(id),
+});
+
+const hotChannel = createViteHotChannel(runner, "worker");
+```
 
 ### RPC
 

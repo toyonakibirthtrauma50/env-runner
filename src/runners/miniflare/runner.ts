@@ -8,12 +8,28 @@ import type { EnvRunnerData } from "../../common/base-runner.ts";
 
 export type { EnvRunnerData as MiniflareEnvRunnerData } from "../../common/base-runner.ts";
 
+/** Result from a module transform (compatible with Vite's `TransformResult`). */
+export interface TransformResult {
+  code: string;
+}
+
 export interface MiniflareEnvRunnerOptions {
   name: string;
   hooks?: WorkerHooks;
   data?: EnvRunnerData;
   /** Options passed directly to the Miniflare constructor. */
   miniflareOptions?: Record<string, unknown>;
+  /**
+   * Optional module transform callback. When provided, the module fallback
+   * service calls this instead of reading raw files from disk.
+   *
+   * This enables integration with Vite's transform pipeline — pass
+   * `environment.transformRequest` to get TS/JSX/etc. compiled on the fly.
+   *
+   * @param id - Absolute file path of the module to transform
+   * @returns Transformed code, or null/undefined to fall back to raw disk read
+   */
+  transformRequest?: (id: string) => Promise<TransformResult | null | undefined>;
 }
 
 const IPC_PATH = "/__env_runner_ipc";
@@ -21,12 +37,14 @@ const IPC_PATH = "/__env_runner_ipc";
 export class MiniflareEnvRunner extends BaseEnvRunner {
   #miniflare?: InstanceType<any>;
   #miniflareOptions: Record<string, unknown>;
+  #transformRequest?: (id: string) => Promise<TransformResult | null | undefined>;
   #reloadCounter = 0;
   #ws?: { send(data: string): void; close(): void };
 
   constructor(opts: MiniflareEnvRunnerOptions) {
     super({ ...opts, workerEntry: "" });
     this.#miniflareOptions = opts.miniflareOptions || {};
+    this.#transformRequest = opts.transformRequest;
     this.#init();
   }
 
@@ -143,7 +161,7 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       const resolvedEntry = resolve(entryPath);
       const entryDir = dirname(resolvedEntry);
 
-      options.script = generateWrapper(resolvedEntry);
+      options.script = generateWrapper(resolvedEntry, { dynamicOnly: Boolean(this.#transformRequest) });
       options.scriptPath = entryDir + "/__env_runner_wrapper.mjs";
       // Use "/" as modulesRoot so absolute paths don't produce ".." relative paths
       if (!options.modulesRoot) {
@@ -153,15 +171,24 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       // Enable unsafeEval for hot-reload support (re-import entry without restart)
       options.unsafeEvalBinding = "__ENV_RUNNER_UNSAFE_EVAL__";
 
+      // When transformRequest is provided, add module rules so miniflare's
+      // ModuleLocator doesn't reject non-JS extensions (e.g. .ts, .tsx, .jsx)
+      if (this.#transformRequest && !options.modulesRules) {
+        options.modulesRules = [
+          { type: "ESModule", include: ["**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.mts"] },
+        ];
+      }
+
       // Module fallback: resolve imports that workerd can't find on its own
       // (e.g. imports from node_modules, parent dirs, cache-busted reload imports)
       if (!options.unsafeModuleFallbackService) {
         const _require = createRequire(resolvedEntry);
+        const _transformRequest = this.#transformRequest;
         options.unsafeUseModuleFallbackService = true;
         // Map workerd module names to real filesystem paths for correct
         // relative import resolution from bare-specifier modules.
         const modulePathMap = new Map<string, string>();
-        options.unsafeModuleFallbackService = (request: Request) => {
+        options.unsafeModuleFallbackService = async (request: Request) => {
           const url = new URL(request.url);
           const specifier = url.searchParams.get("specifier");
           const rawSpecifier = url.searchParams.get("rawSpecifier");
@@ -211,14 +238,28 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
               }
             }
           }
+
+          // workerd requires name to match specifier
+          // Preserve query string in name for cache-busting (workerd caches by name)
+          const rawQuery = specifier.includes("?") ? specifier.slice(specifier.indexOf("?")) : "";
+          const name =
+            (cleanSpecifier.startsWith("/") ? cleanSpecifier.slice(1) : cleanSpecifier) + rawQuery;
+
+          // Try Vite transform pipeline first (TS/JSX → JS, etc.)
+          if (_transformRequest) {
+            try {
+              const result = await _transformRequest(resolvedPath);
+              if (result?.code) {
+                modulePathMap.set(name, resolvedPath);
+                return Response.json({ name, esModule: result.code });
+              }
+            } catch {
+              // Fall through to raw disk read
+            }
+          }
+
           try {
             const contents = readFileSync(resolvedPath, "utf8");
-            // workerd requires name to match specifier
-            // Preserve query string in name for cache-busting (workerd caches by name)
-            const rawQuery = specifier.includes("?") ? specifier.slice(specifier.indexOf("?")) : "";
-            const name =
-              (cleanSpecifier.startsWith("/") ? cleanSpecifier.slice(1) : cleanSpecifier) +
-              rawQuery;
             // Track the real path so relative imports from this module resolve correctly
             modulePathMap.set(name, resolvedPath);
             // Detect module type: .mjs is always ESM, .cjs is always CJS,
@@ -284,10 +325,17 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
  *
  * Passed as an in-memory `script` to Miniflare (no temp files needed).
  */
-function generateWrapper(entryPath: string): string {
+function generateWrapper(
+  entryPath: string,
+  opts?: { dynamicOnly?: boolean },
+): string {
+  // When dynamicOnly is set, skip static `export *` to avoid miniflare's
+  // ModuleLocator walking the entry's import tree at startup. All module
+  // loading goes through dynamic import() via unsafeEvalBinding instead.
+  const staticReExport = opts?.dynamicOnly ? "" : `export * from ${JSON.stringify(entryPath)};`;
   return /* js */ `import __process from "node:process";
 if (!globalThis.process) { globalThis.process = __process; }
-export * from ${JSON.stringify(entryPath)};
+${staticReExport}
 
 const __IPC_PATH = "${IPC_PATH}";
 const __entryPath = ${JSON.stringify(entryPath)};

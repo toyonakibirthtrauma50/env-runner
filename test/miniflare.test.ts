@@ -181,6 +181,74 @@ export default {
   });
 });
 
+describe("MiniflareEnvRunner (transformRequest)", () => {
+  let runner: MiniflareEnvRunner | undefined;
+  let tmpDir: string | undefined;
+
+  afterEach(async () => {
+    await runner?.close();
+    runner = undefined;
+    if (tmpDir) {
+      rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = undefined;
+    }
+  });
+
+  it("transforms modules through the transform pipeline", async () => {
+    tmpDir = mkdtempSync(join(_dir, ".tmp-transform-"));
+    const helperPath = join(tmpDir, "helper.ts");
+    const entryPath = join(tmpDir, "worker.mjs");
+
+    // Write a TypeScript helper (would fail without transform)
+    writeFileSync(helperPath, `const msg: string = "transformed"; export default msg;`);
+
+    // Entry imports the helper
+    writeFileSync(
+      entryPath,
+      `import msg from "./helper.ts";\nexport default { fetch() { return new Response(msg); } };`,
+    );
+
+    runner = new MiniflareEnvRunner({
+      name: "test-transform",
+      data: { entry: entryPath },
+      transformRequest: async (id) => {
+        if (id.endsWith(".ts")) {
+          const { readFileSync } = await import("node:fs");
+          const code = readFileSync(id, "utf8");
+          // Simple TS→JS: strip type annotations
+          return { code: code.replace(/:\s*string/g, "") };
+        }
+        return null;
+      },
+    });
+    await waitForReady(runner);
+
+    const res = await runner.fetch("http://localhost/");
+    expect(await res.text()).toBe("transformed");
+  });
+
+  it("falls back to raw disk read when transform returns null", async () => {
+    tmpDir = mkdtempSync(join(_dir, ".tmp-transform-"));
+    const entryPath = join(tmpDir, "worker.mjs");
+
+    writeFileSync(entryPath, `export default { fetch() { return new Response("raw"); } };`);
+
+    const transformedIds: string[] = [];
+    runner = new MiniflareEnvRunner({
+      name: "test-transform-fallback",
+      data: { entry: entryPath },
+      transformRequest: async (id) => {
+        transformedIds.push(id);
+        return null; // Always fall back
+      },
+    });
+    await waitForReady(runner);
+
+    const res = await runner.fetch("http://localhost/");
+    expect(await res.text()).toBe("raw");
+  });
+});
+
 // --- Helpers ---
 
 function waitForReady(runner: EnvRunner, timeout = 5000): Promise<void> {
