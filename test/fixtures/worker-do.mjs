@@ -1,7 +1,7 @@
 // Worker with a Durable Object export to test that custom exports are preserved
 
 export class Counter {
-  constructor(state, env) {
+  constructor(state, _env) {
     this.state = state;
     this.storage = state.storage;
   }
