@@ -1,5 +1,8 @@
 const IPC_PATH = "/__env_runner_ipc";
 
+/** Service binding name used for cross-request IPC (worker → runner). */
+export const IPC_BINDING = "__ENV_RUNNER_IPC";
+
 /**
  * Generates a wrapper module that imports the user entry and adds IPC glue.
  *
@@ -9,6 +12,10 @@ const IPC_PATH = "/__env_runner_ipc";
  * - Messages: JSON over the WebSocket (no per-message `dispatchFetch`)
  * - Reload: `{ type: "reload" }` triggers cache-busted re-import
  * - Shutdown: `{ type: "shutdown" }` calls `ipc.onClose()`
+ *
+ * For outgoing messages during fetch request handling, uses a service binding
+ * (`__ENV_RUNNER_IPC`) to avoid workerd's cross-request I/O restriction on
+ * the WebSocket object.
  *
  * Passed as an in-memory `script` to Miniflare (no temp files needed).
  */
@@ -55,10 +62,12 @@ ${staticReExport}
 ${explicitExports}
 
 const __IPC_PATH = "${IPC_PATH}";
+const __IPC_BINDING = "${IPC_BINDING}";
 const __entryPath = ${JSON.stringify(entryPath)};
 let __userEntry;
 let __ipcInitialized = false;
 let __serverWs;
+let __currentEnv;
 
 async function __loadEntry(env, path) {
   globalThis.__ENV_RUNNER_UNSAFE_EVAL__ = env.__ENV_RUNNER_UNSAFE_EVAL__;
@@ -72,8 +81,17 @@ async function __loadEntry(env, path) {
 }
 
 function __sendMessage(message) {
+  const payload = JSON.stringify(message);
+  const env = __currentEnv;
+  if (env && env[__IPC_BINDING]) {
+    env[__IPC_BINDING].fetch("http://localhost/__ipc", {
+      method: "POST",
+      body: payload,
+    }).catch(() => {});
+    return;
+  }
   if (__serverWs) {
-    __serverWs.send(JSON.stringify(message));
+    __serverWs.send(payload);
   }
 }
 
@@ -158,7 +176,12 @@ export default {
     if (!entryFetch) {
       return new Response("No fetch handler exported", { status: 500 });
     }
-    ${fetchBody}
+    __currentEnv = env;
+    try {
+      ${fetchBody}
+    } finally {
+      __currentEnv = undefined;
+    }
   }
 };
 `;

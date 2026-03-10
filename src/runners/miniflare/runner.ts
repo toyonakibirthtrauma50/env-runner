@@ -4,9 +4,12 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { proxyUpgrade } from "httpxy";
 import { BaseEnvRunner } from "../../common/base-runner.ts";
 import type { EnvRunnerData } from "../../common/base-runner.ts";
-import { generateWrapper } from "./wrapper.ts";
+import { generateWrapper, IPC_BINDING } from "./wrapper.ts";
+import type { IncomingMessage } from "node:http";
+import type { Socket } from "node:net";
 
 export type { EnvRunnerData as MiniflareEnvRunnerData } from "../../common/base-runner.ts";
 
@@ -226,17 +229,41 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
     });
   }
 
+  override async upgrade(context: {
+    node: { req: IncomingMessage; socket: Socket; head: any };
+  }): Promise<void> {
+    if (!this.#miniflare || this.closed) {
+      context.node.socket.destroy();
+      return;
+    }
+    // Proxy the WebSocket upgrade to Miniflare's internal workerd HTTP server
+    const mfUrl = await this.#miniflare.unsafeGetDirectURL();
+    const address = new URL(mfUrl);
+    await proxyUpgrade(
+      { host: address.hostname, port: Number(address.port) },
+      context.node.req,
+      context.node.socket,
+      context.node.head,
+    );
+  }
+
   async #initAsync() {
     const { Miniflare } = await import("miniflare");
 
     const entryPath = this._data?.entry as string | undefined;
 
     const userFlags = (this.#miniflareOptions.compatibilityFlags as string[]) || [];
+    const userDirectSockets = (this.#miniflareOptions.unsafeDirectSockets as unknown[]) || [];
     const options: Record<string, unknown> = {
       compatibilityDate: new Date().toISOString().split("T")[0],
       modules: true,
       ...this.#miniflareOptions,
       compatibilityFlags: [...new Set(["nodejs_compat", ...userFlags])],
+      // Expose a direct socket so we can proxy WebSocket upgrades via workerd
+      unsafeDirectSockets: [
+        { host: "127.0.0.1", port: 0 },
+        ...userDirectSockets,
+      ],
     };
 
     // Generate in-memory wrapper module with IPC support
@@ -279,6 +306,24 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
 
       // Enable unsafeEval for hot-reload support (re-import entry without restart)
       options.unsafeEvalBinding = "__ENV_RUNNER_UNSAFE_EVAL__";
+
+      // Service binding for cross-request IPC (worker → runner).
+      // In workerd, the WebSocket created during IPC handshake cannot be used
+      // from a different request context. This binding provides an alternative
+      // channel for sending messages back to the runner during fetch handling.
+      const userBindings = (options.serviceBindings as Record<string, unknown>) || {};
+      options.serviceBindings = {
+        ...userBindings,
+        [IPC_BINDING]: async (request: Request) => {
+          try {
+            const message = await request.json();
+            this._handleMessage(message);
+          } catch {
+            // Ignore malformed messages
+          }
+          return new Response(null, { status: 204 });
+        },
+      };
 
       // When transformRequest is provided, add module rules so miniflare's
       // ModuleLocator doesn't reject non-JS extensions (e.g. .ts, .tsx, .jsx)
