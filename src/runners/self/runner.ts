@@ -3,7 +3,7 @@ import type { WorkerHooks } from "../../types.ts";
 import { BaseEnvRunner } from "../../common/base-runner.ts";
 import type { EnvRunnerData } from "../../common/base-runner.ts";
 import type { AppEntry } from "../../common/worker-utils.ts";
-import { resolveEntry } from "../../common/worker-utils.ts";
+import { resolveEntry, reloadEntryModule } from "../../common/worker-utils.ts";
 
 export type { EnvRunnerData as SelfEnvRunnerData } from "../../common/base-runner.ts";
 
@@ -34,6 +34,17 @@ export class SelfEnvRunner extends BaseEnvRunner {
       return;
     }
     this.#entry?.ipc?.onMessage?.(message);
+  }
+
+  override async reloadModule(): Promise<void> {
+    const entryPath = this._data?.entry as string | undefined;
+    if (!entryPath || !this.#entry) {
+      throw new Error("Cannot reload: no entry loaded");
+    }
+    const sendFn = (message: unknown) => {
+      queueMicrotask(() => this._handleMessage(message));
+    };
+    this.#entry = await reloadEntryModule(entryPath, this.#entry, sendFn);
   }
 
   // #region Protected methods

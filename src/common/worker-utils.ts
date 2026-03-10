@@ -32,3 +32,24 @@ export function parseServerAddress(server: Server): { host: string; port: number
   const url = new URL(server.url!);
   return { host: url.hostname, port: Number(url.port) };
 }
+
+/**
+ * Re-import the user entry module with cache busting.
+ * Tears down old IPC hooks and re-initializes new ones.
+ */
+export async function reloadEntryModule(
+  entryPath: string,
+  currentEntry: AppEntry,
+  sendMessage: (message: unknown) => void,
+): Promise<AppEntry> {
+  // Tear down old IPC
+  await currentEntry.ipc?.onClose?.();
+
+  // Re-import with cache-busting query string
+  const newEntry = await resolveEntry(entryPath + "?t=" + Date.now());
+
+  // Re-initialize IPC
+  await newEntry.ipc?.onOpen?.({ sendMessage });
+
+  return newEntry;
+}

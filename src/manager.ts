@@ -120,6 +120,13 @@ export class RunnerManager implements EnvRunner {
     });
   }
 
+  async reloadModule(timeout?: number): Promise<void> {
+    if (!this._runner?.reloadModule) {
+      throw new Error("Active runner does not support reloadModule()");
+    }
+    return this._runner.reloadModule(timeout);
+  }
+
   async close() {
     this._closed = true;
     this._messageQueue.length = 0;

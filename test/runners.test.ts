@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, join } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { EnvRunner } from "../src/index.ts";
 
@@ -255,6 +256,99 @@ for (const runnerDef of runners) {
       const closed = inspect(runner);
       expect(closed).toContain("closed");
       runner = undefined;
+    });
+  });
+}
+
+// --- reloadModule tests ---
+
+const reloadRunners = [
+  { name: "NodeWorkerEnvRunner", create: (opts: any) => new NodeWorkerEnvRunner(opts) },
+  { name: "NodeProcessEnvRunner", create: (opts: any) => new NodeProcessEnvRunner(opts) },
+  {
+    name: "BunProcessEnvRunner",
+    create: (opts: any) => new BunProcessEnvRunner(opts),
+    skip: !hasBun,
+  },
+  // SelfEnvRunner reloadModule works in real Node.js but not under vitest's module transform
+];
+
+for (const { name, create, skip } of reloadRunners) {
+  describe.skipIf(skip ?? false)(`${name} reloadModule`, () => {
+    let runner: EnvRunner | undefined;
+    let tmpDir: string | undefined;
+
+    afterEach(async () => {
+      await runner?.close();
+      runner = undefined;
+      if (tmpDir) {
+        rmSync(tmpDir, { recursive: true, force: true });
+        tmpDir = undefined;
+      }
+    });
+
+    it("reloads entry module without restarting", async () => {
+      tmpDir = mkdtempSync(join(_dir, ".tmp-reload-"));
+      const entryPath = join(tmpDir, "app.mjs");
+
+      writeFileSync(entryPath, `export default { fetch() { return new Response("v1"); } };`);
+
+      runner = create({ name: "test-reload", data: { entry: entryPath } });
+      await runner.waitForReady();
+
+      const res1 = await runner.fetch("http://localhost/");
+      expect(await res1.text()).toBe("v1");
+
+      writeFileSync(entryPath, `export default { fetch() { return new Response("v2"); } };`);
+      await runner.reloadModule!();
+
+      const res2 = await runner.fetch("http://localhost/");
+      expect(await res2.text()).toBe("v2");
+    });
+
+    it("re-initializes IPC hooks after reload", async () => {
+      tmpDir = mkdtempSync(join(_dir, ".tmp-reload-"));
+      const entryPath = join(tmpDir, "app.mjs");
+
+      const makeEntry = (v: number) => `
+let send;
+export default {
+  fetch() { return new Response("v${v}"); },
+  ipc: {
+    onOpen(ctx) { send = ctx.sendMessage; send({ type: "ready", version: ${v} }); },
+    onMessage(msg) { if (msg?.type === "echo") send?.({ type: "echo-reply", version: ${v} }); },
+    onClose() { send = undefined; },
+  },
+};`;
+
+      writeFileSync(entryPath, makeEntry(1));
+      runner = create({ name: "test-reload-ipc", data: { entry: entryPath } });
+
+      const readyV1 = new Promise<any>((resolve) => {
+        runner!.onMessage((msg: any) => {
+          if (msg?.type === "ready" && msg.version === 1) resolve(msg);
+        });
+      });
+      await runner.waitForReady();
+      await readyV1;
+
+      writeFileSync(entryPath, makeEntry(2));
+
+      const readyV2 = new Promise<any>((resolve) => {
+        runner!.onMessage((msg: any) => {
+          if (msg?.type === "ready" && msg.version === 2) resolve(msg);
+        });
+      });
+      await runner.reloadModule!();
+      await readyV2;
+
+      const reply = new Promise<any>((resolve) => {
+        runner!.onMessage((msg: any) => {
+          if (msg?.type === "echo-reply") resolve(msg);
+        });
+      });
+      runner.sendMessage({ type: "echo" });
+      expect(await reply).toEqual({ type: "echo-reply", version: 2 });
     });
   });
 }

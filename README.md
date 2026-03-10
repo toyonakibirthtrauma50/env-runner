@@ -151,6 +151,9 @@ runner.onMessage((msg) => console.log(msg));
 // Request-response RPC
 const result = await runner.rpc<string>("transformHTML", "<html>...</html>");
 
+// Hot-reload entry module without restarting the worker
+await runner.reloadModule();
+
 // Graceful shutdown
 await runner.close();
 ```

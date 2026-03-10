@@ -114,6 +114,31 @@ export abstract class BaseEnvRunner implements EnvRunner {
     });
   }
 
+  async reloadModule(timeout = 5000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Module reload timed out"));
+      }, timeout);
+      const listener = (msg: any) => {
+        if (msg?.event === "module-reloaded") {
+          cleanup();
+          if (msg.error) {
+            reject(typeof msg.error === "string" ? new Error(msg.error) : msg.error);
+          } else {
+            resolve();
+          }
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.offMessage(listener);
+      };
+      this.onMessage(listener);
+      this.sendMessage({ event: "reload-module" });
+    });
+  }
+
   async close(cause?: unknown) {
     if (this.closed) {
       return;

@@ -41,7 +41,7 @@ src/
 - **`src/vite.ts`** — Vite Environment API helpers: `createViteHotChannel()` (host-side HotChannel from runner RPC hooks) and `createViteTransport()` (worker-side ModuleRunner transport)
 - **`src/types.ts`** — Core interfaces: `EnvRunner`, `WorkerAddress`, `WorkerHooks`, `RunnerRPCHooks`, `RPCOptions`
 - **`src/common/base-runner.ts`** — `BaseEnvRunner` abstract class + `EnvRunnerData`: shared logic for all runners (fetch proxy with exponential backoff, upgrade, message dispatch, graceful shutdown, socket cleanup)
-- **`src/common/worker-utils.ts`** — Shared utilities for built-in workers: `AppEntry` interface (with optional `ipc` hooks), `AppEntryIPC`/`AppEntryIPCContext` types, `resolveEntry()` to dynamically import user entry, `parseServerAddress()` to extract host/port from srvx server
+- **`src/common/worker-utils.ts`** — Shared utilities for built-in workers: `AppEntry` interface (with optional `ipc` hooks), `AppEntryIPC`/`AppEntryIPCContext` types, `resolveEntry()` to dynamically import user entry, `parseServerAddress()` to extract host/port from srvx server, `reloadEntryModule()` for cache-busted re-import with IPC teardown/re-init
 - **`src/runners/node-worker/runner.ts`** — `NodeWorkerEnvRunner` extends `BaseEnvRunner`: spawns Node.js Worker threads, data via `workerData`
 - **`src/runners/node-worker/worker.ts`** — Built-in srvx worker: reads `data.entry` from `workerData`, starts srvx server, reports address via `parentPort`
 - **`src/runners/node-process/runner.ts`** — `NodeProcessEnvRunner` extends `BaseEnvRunner`: spawns a child process via `fork()`, supports custom `execArgv`
@@ -69,7 +69,8 @@ src/
 5. `sendMessage()` / `onMessage()` / `offMessage()` for bidirectional messaging
 6. `waitForReady(timeout?)` returns a promise that resolves when the runner becomes ready (address received)
 7. `rpc(name, data?, opts?)` sends a request-response message over IPC (auto-generates ID, handles timeout, error propagation)
-8. `close()` sends shutdown event, waits for graceful exit (configurable via `ENV_RUNNER_SHUTDOWN_TIMEOUT`, default 5s, disabled in CI/test), then terminates
+8. `reloadModule(timeout?)` re-imports the entry module without restarting the worker/process (cache-busted `import()`, IPC teardown/re-init)
+9. `close()` sends shutdown event, waits for graceful exit (configurable via `ENV_RUNNER_SHUTDOWN_TIMEOUT`, default 5s, disabled in CI/test), then terminates
 
 Subclasses implement abstract methods: `sendMessage()`, `_hasRuntime()`, `_closeRuntime()`, `_runtimeType()`, and runtime init.
 

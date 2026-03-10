@@ -78,6 +78,9 @@ export interface EnvRunner extends WorkerHooks, RunnerRPCHooks {
   /** Send an RPC request and wait for the response. */
   rpc<T = unknown>(name: string, data?: unknown, opts?: RPCOptions): Promise<T>;
 
+  /** Re-import the entry module without restarting the worker/process. */
+  reloadModule?(timeout?: number): Promise<void>;
+
   /** Gracefully shut down the worker. */
   close(): Promise<void>;
 }
