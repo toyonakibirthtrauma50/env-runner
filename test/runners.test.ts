@@ -437,6 +437,7 @@ for (const { name, create, selfRunner } of upgradeRunners) {
         });
 
         expect(res.headers["x-upgraded"]).toBe("true");
+        res.socket?.destroy();
       });
     }
   });
