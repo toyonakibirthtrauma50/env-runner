@@ -16,12 +16,13 @@ export interface MiniflareEnvRunnerOptions {
   miniflareOptions?: Record<string, unknown>;
 }
 
-const IPC_HEADER = "x-env-runner-ipc";
+const IPC_PATH = "/__env_runner_ipc";
 
 export class MiniflareEnvRunner extends BaseEnvRunner {
   #miniflare?: InstanceType<any>;
   #miniflareOptions: Record<string, unknown>;
   #reloadCounter = 0;
+  #ws?: { send(data: string): void; close(): void };
 
   constructor(opts: MiniflareEnvRunnerOptions) {
     super({ ...opts, workerEntry: "" });
@@ -38,7 +39,7 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
   }
 
   sendMessage(message: unknown) {
-    if (!this.#miniflare) {
+    if (!this.#ws) {
       throw new Error("Miniflare env runner should be initialized before sending messages.");
     }
     // Handle ping/pong internally
@@ -46,24 +47,18 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       queueMicrotask(() => this._handleMessage({ type: "pong", data: (message as any).data }));
       return;
     }
-    // Send message to worker via dispatchFetch with IPC header
-    this.#miniflare
-      .dispatchFetch("http://localhost/__env_runner_ipc", {
-        method: "POST",
-        headers: { [IPC_HEADER]: "message" },
-        body: JSON.stringify(message),
-      })
-      .catch(() => {});
+    this.#ws.send(JSON.stringify({ type: "message", data: message }));
   }
 
   /**
    * Hot-reload the user entry module without recreating the Miniflare instance.
    *
-   * Uses `unsafeEvalBinding` to dynamically re-import the entry module with a
-   * cache-busting query string, served via `unsafeModuleFallbackService`.
+   * Sends `reload-module` event over the WebSocket. The worker wrapper uses
+   * `unsafeEvalBinding` to re-import the entry with a cache-busting query string
+   * and responds with `module-reloaded` when done.
    */
-  override async reloadModule(): Promise<void> {
-    if (!this.#miniflare) {
+  override async reloadModule(timeout = 5000): Promise<void> {
+    if (!this.#ws) {
       throw new Error("Miniflare env runner should be initialized before reloading.");
     }
     const entryPath = this._data?.entry as string | undefined;
@@ -71,13 +66,29 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       return;
     }
     this.#reloadCounter++;
-    await this.#miniflare
-      .dispatchFetch("http://localhost/__env_runner_ipc", {
-        method: "POST",
-        headers: { [IPC_HEADER]: "reload" },
-        body: String(this.#reloadCounter),
-      })
-      .catch(() => {});
+    const version = this.#reloadCounter;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Module reload timed out"));
+      }, timeout);
+      const listener = (msg: any) => {
+        if (msg?.event === "module-reloaded") {
+          cleanup();
+          if (msg.error) {
+            reject(typeof msg.error === "string" ? new Error(msg.error) : msg.error);
+          } else {
+            resolve();
+          }
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.offMessage(listener);
+      };
+      this.onMessage(listener);
+      this.#ws!.send(JSON.stringify({ type: "reload", version }));
+    });
   }
 
   // #region Protected methods
@@ -94,13 +105,11 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
     if (!this.#miniflare) {
       return;
     }
-    // Notify worker of shutdown
-    await this.#miniflare
-      .dispatchFetch("http://localhost/__env_runner_ipc", {
-        method: "POST",
-        headers: { [IPC_HEADER]: "shutdown" },
-      })
-      .catch(() => {});
+    if (this.#ws) {
+      this.#ws.send(JSON.stringify({ type: "shutdown" }));
+      this.#ws.close();
+      this.#ws = undefined;
+    }
     await this.#miniflare.dispose();
     this.#miniflare = undefined;
   }
@@ -127,19 +136,6 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       modules: true,
       ...this.#miniflareOptions,
       compatibilityFlags: [...new Set(["nodejs_compat", ...userFlags])],
-    };
-
-    // Inject IPC service binding (worker → runner outbound messages)
-    const existingBindings = (options.serviceBindings as Record<string, unknown>) || {};
-    options.serviceBindings = {
-      ...existingBindings,
-      __ENV_RUNNER_IPC: async (request: Request) => {
-        const message = await request.json().catch(() => null);
-        if (message !== null) {
-          this._handleMessage(message);
-        }
-        return new Response(null, { status: 204 });
-      },
     };
 
     // Generate in-memory wrapper module with IPC support
@@ -246,15 +242,26 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
 
     await this.#miniflare.ready;
 
-    // Trigger IPC init (calls onOpen in the worker)
-    const initRes = await this.#miniflare.dispatchFetch("http://localhost/__env_runner_ipc", {
-      method: "POST",
-      headers: { [IPC_HEADER]: "init" },
+    // Establish persistent WebSocket connection for IPC
+    const initRes = await this.#miniflare.dispatchFetch("http://localhost" + IPC_PATH, {
+      headers: { upgrade: "websocket" },
     });
-    if (initRes.status !== 204) {
-      const body = await initRes.text().catch(() => "");
-      console.error("[miniflare-runner] init failed:", initRes.status, body);
+    const ws = initRes.webSocket;
+    if (!ws) {
+      throw new Error("Failed to establish WebSocket IPC channel");
     }
+    ws.accept();
+    this.#ws = ws;
+
+    // Listen for messages from the worker
+    ws.addEventListener("message", (event: { data: string }) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        this._handleMessage(parsed);
+      } catch {
+        // Ignore malformed messages
+      }
+    });
 
     // Signal ready with a dummy address (fetch is overridden)
     this._handleMessage({ address: { host: "127.0.0.1", port: 0 } });
@@ -269,12 +276,11 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
  * Generates a wrapper module that imports the user entry and adds IPC glue.
  *
  * The user module is expected to export `fetch` and optionally `ipc`.
- * The wrapper intercepts IPC requests and bridges `ipc` hooks
- * via `env.__ENV_RUNNER_IPC` service binding.
- *
- * Supports hot-reload via `unsafeEvalBinding`: the "reload" IPC message
- * uses dynamic `import()` with a cache-busting query string to re-import
- * the entry module (served fresh by `unsafeModuleFallbackService`).
+ * The wrapper uses a persistent WebSocket pair for bidirectional IPC:
+ * - Init: `fetch` with `upgrade: websocket` creates a WebSocketPair
+ * - Messages: JSON over the WebSocket (no per-message `dispatchFetch`)
+ * - Reload: `{ type: "reload" }` triggers cache-busted re-import
+ * - Shutdown: `{ type: "shutdown" }` calls `ipc.onClose()`
  *
  * Passed as an in-memory `script` to Miniflare (no temp files needed).
  */
@@ -283,11 +289,11 @@ function generateWrapper(entryPath: string): string {
 if (!globalThis.process) { globalThis.process = __process; }
 export * from ${JSON.stringify(entryPath)};
 
-const __IPC_HEADER = "${IPC_HEADER}";
+const __IPC_PATH = "${IPC_PATH}";
 const __entryPath = ${JSON.stringify(entryPath)};
 let __userEntry;
 let __ipcInitialized = false;
-let __sendMessage;
+let __serverWs;
 
 async function __loadEntry(env, path) {
   const importFn = env.__ENV_RUNNER_UNSAFE_EVAL__.newAsyncFunction(
@@ -299,65 +305,86 @@ async function __loadEntry(env, path) {
   return mod.default || mod;
 }
 
+function __sendMessage(message) {
+  if (__serverWs) {
+    __serverWs.send(JSON.stringify(message));
+  }
+}
+
+async function __handleWsMessage(env, data) {
+  let msg;
+  try { msg = JSON.parse(data); } catch { return; }
+
+  if (msg.type === "message") {
+    if (__userEntry?.ipc?.onMessage) {
+      __userEntry.ipc.onMessage(msg.data);
+    }
+    return;
+  }
+
+  if (msg.type === "reload" && env.__ENV_RUNNER_UNSAFE_EVAL__) {
+    const version = msg.version || 0;
+    try {
+      const newEntry = await __loadEntry(env, __entryPath + "?t=" + version);
+      if (__userEntry?.ipc?.onClose) {
+        await __userEntry.ipc.onClose();
+      }
+      __userEntry = newEntry;
+      __ipcInitialized = false;
+      if (__userEntry.ipc?.onOpen) {
+        __ipcInitialized = true;
+        await __userEntry.ipc.onOpen({ sendMessage: __sendMessage });
+      }
+      __sendMessage({ event: "module-reloaded" });
+    } catch (e) {
+      __sendMessage({ event: "module-reloaded", error: String(e) });
+    }
+    return;
+  }
+
+  if (msg.type === "shutdown") {
+    if (__userEntry?.ipc?.onClose) {
+      await __userEntry.ipc.onClose();
+    }
+    return;
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
-    const ipcType = request.headers.get(__IPC_HEADER);
-    if (ipcType) {
-      if (ipcType === "init") {
-        try {
-          if (!__userEntry) {
-            __userEntry = await __loadEntry(env, __entryPath);
-          }
-        } catch (e) {
-          return new Response("Failed to load entry: " + String(e), { status: 500 });
+    const url = new URL(request.url);
+
+    // WebSocket IPC handshake
+    if (url.pathname === __IPC_PATH && request.headers.get("upgrade") === "websocket") {
+      try {
+        if (!__userEntry) {
+          __userEntry = await __loadEntry(env, __entryPath);
         }
-        if (!__ipcInitialized && __userEntry.ipc && env.__ENV_RUNNER_IPC) {
-          __ipcInitialized = true;
-          __sendMessage = (message) => {
-            env.__ENV_RUNNER_IPC.fetch("http://ipc/", {
-              method: "POST",
-              body: JSON.stringify(message),
-            });
-          };
-          if (__userEntry.ipc.onOpen) {
-            await __userEntry.ipc.onOpen({ sendMessage: __sendMessage });
-          }
-        }
-        return new Response(null, { status: 204 });
+      } catch (e) {
+        return new Response("Failed to load entry: " + String(e), { status: 500 });
       }
-      if (ipcType === "message") {
-        const message = await request.json();
-        if (__userEntry?.ipc?.onMessage) {
-          __userEntry.ipc.onMessage(message);
+
+      const pair = new WebSocketPair();
+      const client = pair[0];
+      const server = pair[1];
+      server.accept();
+      __serverWs = server;
+
+      server.addEventListener("message", (event) => {
+        __handleWsMessage(env, event.data);
+      });
+
+      // Initialize IPC hooks
+      if (!__ipcInitialized && __userEntry.ipc) {
+        __ipcInitialized = true;
+        if (__userEntry.ipc.onOpen) {
+          await __userEntry.ipc.onOpen({ sendMessage: __sendMessage });
         }
-        return new Response(null, { status: 204 });
       }
-      if (ipcType === "shutdown") {
-        if (__userEntry?.ipc?.onClose) {
-          await __userEntry.ipc.onClose();
-        }
-        return new Response(null, { status: 204 });
-      }
-      if (ipcType === "reload" && env.__ENV_RUNNER_UNSAFE_EVAL__) {
-        const version = await request.text();
-        try {
-          const newEntry = await __loadEntry(env, __entryPath + "?t=" + version);
-          if (__userEntry?.ipc?.onClose) {
-            await __userEntry.ipc.onClose();
-          }
-          __userEntry = newEntry;
-          __ipcInitialized = false;
-          if (__userEntry.ipc?.onOpen && __sendMessage) {
-            __ipcInitialized = true;
-            await __userEntry.ipc.onOpen({ sendMessage: __sendMessage });
-          }
-        } catch (e) {
-          return new Response(String(e), { status: 500 });
-        }
-        return new Response(null, { status: 204 });
-      }
-      return new Response(null, { status: 400 });
+
+      return new Response(null, { status: 101, webSocket: client });
     }
+
     if (!__userEntry) {
       return new Response("Worker not initialized", { status: 503 });
     }
