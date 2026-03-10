@@ -7,7 +7,7 @@
 
 <!-- /automd -->
 
-Generic environment runner for Node.js. Run your server apps in isolated worker threads, child processes, or in-process — with hot-reload, WebSocket proxying, and bidirectional messaging.
+Generic environment runner for JavaScript runtimes. Run your server apps across Node.js worker threads, child processes, Bun, Cloudflare Workers (via miniflare), or in-process — with hot-reload, WebSocket proxying, and bidirectional messaging.
 
 ## Usage
 
