@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.1.5
+
+[compare changes](https://github.com/unjs/env-runner/compare/v0.1.4...v0.1.5)
+
+### 🩹 Fixes
+
+- **miniflare:** Serve CJS modules with an ESM shim wrapper ([18acd21](https://github.com/unjs/env-runner/commit/18acd21))
+
+### ❤️ Contributors
+
+- Pooya Parsa ([@pi0](https://github.com/pi0))
+
 ## v0.1.4
 
 [compare changes](https://github.com/unjs/env-runner/compare/v0.1.3...v0.1.4)
