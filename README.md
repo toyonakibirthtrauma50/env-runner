@@ -150,12 +150,12 @@ await runner.close();
 
 **Available runners:**
 
-| Runner                 | Isolation                      | IPC mechanism                      |
-| ---------------------- | ------------------------------ | ---------------------------------- |
-| `NodeWorkerEnvRunner`  | Worker thread                  | `workerData` / `parentPort`        |
-| `NodeProcessEnvRunner` | Child process (`fork`)         | `ENV_RUNNER_DATA` / `process.send` |
-| `BunProcessEnvRunner`  | Bun or Node.js process         | `Bun.spawn` IPC or `fork()`        |
-| `SelfEnvRunner`        | In-process                     | In-memory channel                  |
+| Runner                 | Isolation                      | IPC mechanism                       |
+| ---------------------- | ------------------------------ | ----------------------------------- |
+| `NodeWorkerEnvRunner`  | Worker thread                  | `workerData` / `parentPort`         |
+| `NodeProcessEnvRunner` | Child process (`fork`)         | `ENV_RUNNER_DATA` / `process.send`  |
+| `BunProcessEnvRunner`  | Bun or Node.js process         | `Bun.spawn` IPC or `fork()`         |
+| `SelfEnvRunner`        | In-process                     | In-memory channel                   |
 | `MiniflareEnvRunner`   | Cloudflare Workers (miniflare) | `serviceBindings` + `dispatchFetch` |
 
 #### Miniflare Runner
