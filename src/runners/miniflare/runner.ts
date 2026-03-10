@@ -3,6 +3,7 @@ import type { WorkerHooks } from "../../types.ts";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BaseEnvRunner } from "../../common/base-runner.ts";
 import type { EnvRunnerData } from "../../common/base-runner.ts";
 import { generateWrapper } from "./wrapper.ts";
@@ -256,7 +257,7 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       }
 
       options.script = generateWrapper(resolvedEntry, {
-        dynamicOnly: Boolean(this.#transformRequest),
+        dynamicOnly: true,
         captureErrors: this.#captureErrors,
         exports: detectedExports,
       });
@@ -298,8 +299,17 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
           const cleanRaw = rawSpecifier?.split("?")[0];
           let resolvedPath: string;
 
+          // file:// URL specifier — convert to filesystem path
+          const fileUrlRaw = cleanRaw || cleanSpecifier;
+          if (fileUrlRaw.startsWith("file://")) {
+            try {
+              resolvedPath = fileURLToPath(fileUrlRaw);
+            } catch {
+              return new Response(null, { status: 404 });
+            }
+          }
           // Bare specifier (npm package) — resolve via Node module resolution
-          if (cleanRaw && !cleanRaw.startsWith(".") && !cleanRaw.startsWith("/")) {
+          else if (cleanRaw && !cleanRaw.startsWith(".") && !cleanRaw.startsWith("/")) {
             // For node:* builtins not natively supported by workerd, use unenv polyfill
             if (cleanRaw.startsWith("node:")) {
               const nodeName = cleanRaw.slice(5);
