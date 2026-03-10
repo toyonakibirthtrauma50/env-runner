@@ -2,8 +2,9 @@ import type { WorkerHooks } from "../../types.ts";
 
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { init as initCjsLexer, parse as parseCjs } from "cjs-module-lexer";
 import { proxyUpgrade } from "httpxy";
 import { BaseEnvRunner } from "../../common/base-runner.ts";
 import type { EnvRunnerData } from "../../common/base-runner.ts";
@@ -339,7 +340,9 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
         // Map workerd module names to real filesystem paths for correct
         // relative import resolution from bare-specifier modules.
         const modulePathMap = new Map<string, string>();
+        const _cjsLexerReady = ensureCjsLexer();
         options.unsafeModuleFallbackService = async (request: Request) => {
+          await _cjsLexerReady;
           const url = new URL(request.url);
           const specifier = url.searchParams.get("specifier");
           const rawSpecifier = url.searchParams.get("rawSpecifier");
@@ -436,10 +439,20 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
               resolvedPath.endsWith(".mjs") ||
               (!resolvedPath.endsWith(".cjs") &&
                 /\b(import\s|import\(|export\s|export\{|import\.meta\b)/.test(contents));
-            return Response.json({
-              name,
-              ...(isESM ? { esModule: contents } : { commonJsModule: contents }),
-            });
+            if (isESM) {
+              return Response.json({ name, esModule: contents });
+            }
+            // Serve CJS modules with an ESM shim wrapper.
+            // workerd's `commonJsModule` handles CJS execution (module/exports/require),
+            // but callers expect ESM. We serve the raw CJS under a suffixed name and
+            // return an ESM shim that re-imports and re-exports from it.
+            const cjsSuffix = "?__cjs";
+            if (specifier.endsWith(cjsSuffix)) {
+              return Response.json({ name, commonJsModule: contents });
+            }
+            const shimSpecifier = "./" + basename(resolvedPath) + cjsSuffix;
+            const esModule = createCjsEsmShim(shimSpecifier, contents);
+            return Response.json({ name, esModule });
           } catch {
             return new Response(null, { status: 404 });
           }
@@ -532,6 +545,31 @@ function computeCacheKey(entryPath: string, opts: Record<string, unknown>): stri
     }
   }
   return `${resolve(entryPath)}::${JSON.stringify(serializableOpts)}`;
+}
+
+let _cjsLexerReady: Promise<void> | undefined;
+
+function ensureCjsLexer() {
+  if (!_cjsLexerReady) {
+    _cjsLexerReady = initCjsLexer();
+  }
+  return _cjsLexerReady;
+}
+
+function createCjsEsmShim(cjsSpecifier: string, contents: string): string {
+  let namedExports: string[] = [];
+  try {
+    const { exports } = parseCjs(contents);
+    namedExports = exports.filter((e) => e !== "default" && e !== "__esModule");
+  } catch {
+    // If parsing fails, just use default export
+  }
+  const quoted = JSON.stringify(cjsSpecifier);
+  let shim = `import __cjs_mod__ from ${quoted};\nexport default __cjs_mod__;\n`;
+  for (const name of namedExports) {
+    shim += `export var ${name} = __cjs_mod__["${name}"];\n`;
+  }
+  return shim;
 }
 
 // #endregion
