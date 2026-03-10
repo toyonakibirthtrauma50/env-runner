@@ -52,6 +52,12 @@ export interface WorkerHooks {
   onReady?: (worker: EnvRunner, address?: WorkerAddress) => void;
 }
 
+/** Options for the `rpc()` method. */
+export interface RPCOptions {
+  /** Timeout in milliseconds before the RPC call rejects. Default: 3000. */
+  timeout?: number;
+}
+
 /** Core runner interface combining lifecycle hooks, RPC, and request proxying. */
 export interface EnvRunner extends WorkerHooks, RunnerRPCHooks {
   /** Whether the worker is ready to accept requests. */
@@ -65,6 +71,12 @@ export interface EnvRunner extends WorkerHooks, RunnerRPCHooks {
 
   /** Proxy a WebSocket upgrade request to the worker. */
   upgrade?: UpgradeHandler;
+
+  /** Returns a promise that resolves when the runner becomes ready. */
+  waitForReady(timeout?: number): Promise<void>;
+
+  /** Send an RPC request and wait for the response. */
+  rpc<T = unknown>(name: string, data?: unknown, opts?: RPCOptions): Promise<T>;
 
   /** Gracefully shut down the worker. */
   close(): Promise<void>;

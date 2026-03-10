@@ -141,9 +141,15 @@ const response = await runner.fetch("http://localhost/api");
 // Proxy WebSocket upgrades
 runner.upgrade?.({ node: { req, socket, head } });
 
+// Wait for runner to be ready
+await runner.waitForReady();
+
 // Bidirectional messaging
 runner.sendMessage({ type: "ping" });
 runner.onMessage((msg) => console.log(msg));
+
+// Request-response RPC
+const result = await runner.rpc<string>("transformHTML", "<html>...</html>");
 
 // Graceful shutdown
 await runner.close();
@@ -185,6 +191,56 @@ await runner.close();
 ```
 
 The `miniflareOptions` object is passed directly to the [Miniflare constructor](https://developers.cloudflare.com/workers/testing/miniflare/) — you can configure bindings, KV, D1, Durable Objects, and any other Miniflare option.
+
+### Vite Environment API
+
+env-runner provides helpers for integrating with Vite's [Environment API](https://vite.dev/guide/api-environment-runtimes.html):
+
+```ts
+import { createViteHotChannel, createViteTransport } from "env-runner/vite";
+```
+
+**Host side** — create a Vite `HotChannel` from any runner's messaging hooks:
+
+```ts
+import { createViteHotChannel } from "env-runner/vite";
+
+// Bridge env-runner IPC → Vite's DevEnvironment transport
+const transport = createViteHotChannel(runner, "ssr");
+const env = new DevEnvironment("ssr", config, { hot: true, transport });
+```
+
+**Worker side** — create a `ModuleRunner` transport:
+
+```ts
+import { createViteTransport } from "env-runner/vite";
+
+const transport = createViteTransport(sendMessage, onMessage, "ssr");
+const runner = new ModuleRunner({ transport, sourcemapInterceptor: "prepareStackTrace" });
+```
+
+Messages are namespaced by environment name, so multiple Vite environments can share a single runner's IPC channel.
+
+### RPC
+
+Send request-response messages over IPC with automatic ID generation, timeout, and error propagation:
+
+```ts
+// Host side
+const html = await runner.rpc<string>("transformHTML", rawHtml, { timeout: 5000 });
+
+// Worker side (in entry's ipc.onMessage)
+onMessage(msg) {
+  if (msg?.__rpc === "transformHTML") {
+    const result = await transform(msg.data);
+    sendMessage({ __rpc_id: msg.__rpc_id, data: result });
+  }
+}
+```
+
+Errors can be propagated back by sending `{ __rpc_id, error: "message" }`.
+
+### Dynamic Runner Loading
 
 You can also use `loadRunner()` to dynamically load a runner by name:
 

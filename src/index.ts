@@ -5,6 +5,7 @@ export type {
   UpgradeContext,
   UpgradeHandler,
   RunnerRPCHooks,
+  RPCOptions,
   WorkerAddress,
   WorkerHooks,
   EnvRunner,

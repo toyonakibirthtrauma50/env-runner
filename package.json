@@ -23,7 +23,8 @@
     "./runners/deno-process": "./dist/runners/deno-process/runner.mjs",
     "./runners/deno-process/worker": "./dist/runners/deno-process/worker.mjs",
     "./runners/self": "./dist/runners/self/runner.mjs",
-    "./runners/miniflare": "./dist/runners/miniflare/runner.mjs"
+    "./runners/miniflare": "./dist/runners/miniflare/runner.mjs",
+    "./vite": "./dist/vite.mjs"
   },
   "scripts": {
     "build": "obuild",

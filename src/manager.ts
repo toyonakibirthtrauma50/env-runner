@@ -75,6 +75,51 @@ export class RunnerManager implements EnvRunner {
     this._runner?.offMessage(listener);
   }
 
+  waitForReady(timeout = 5000): Promise<void> {
+    if (this.ready) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._messageListeners.delete(listener);
+        reject(new Error("Runner did not become ready in time"));
+      }, timeout);
+      const listener = (message: any) => {
+        if (message?.address || this.ready) {
+          clearTimeout(timer);
+          this._messageListeners.delete(listener);
+          resolve();
+        }
+      };
+      this._messageListeners.add(listener);
+    });
+  }
+
+  rpc<T = unknown>(name: string, data?: unknown, opts?: { timeout?: number }): Promise<T> {
+    const id = Math.random().toString(36).slice(2);
+    const timeout = opts?.timeout ?? 3000;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`RPC "${name}" timed out`));
+      }, timeout);
+      const listener = (msg: any) => {
+        if (msg?.__rpc_id === id) {
+          cleanup();
+          if (msg.error) {
+            reject(typeof msg.error === "string" ? new Error(msg.error) : msg.error);
+          } else {
+            resolve(msg.data as T);
+          }
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.offMessage(listener);
+      };
+      this.onMessage(listener);
+      this.sendMessage({ __rpc: name, __rpc_id: id, data });
+    });
+  }
+
   async close() {
     this._closed = true;
     this._messageQueue.length = 0;

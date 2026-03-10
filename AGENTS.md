@@ -38,7 +38,8 @@ src/
 └── cli.ts                   # CLI entry point
 ```
 
-- **`src/types.ts`** — Core interfaces: `EnvRunner`, `WorkerAddress`, `WorkerHooks`, `RunnerRPCHooks`
+- **`src/vite.ts`** — Vite Environment API helpers: `createViteHotChannel()` (host-side HotChannel from runner RPC hooks) and `createViteTransport()` (worker-side ModuleRunner transport)
+- **`src/types.ts`** — Core interfaces: `EnvRunner`, `WorkerAddress`, `WorkerHooks`, `RunnerRPCHooks`, `RPCOptions`
 - **`src/common/base-runner.ts`** — `BaseEnvRunner` abstract class + `EnvRunnerData`: shared logic for all runners (fetch proxy with exponential backoff, upgrade, message dispatch, graceful shutdown, socket cleanup)
 - **`src/common/worker-utils.ts`** — Shared utilities for built-in workers: `AppEntry` interface (with optional `ipc` hooks), `AppEntryIPC`/`AppEntryIPCContext` types, `resolveEntry()` to dynamically import user entry, `parseServerAddress()` to extract host/port from srvx server
 - **`src/runners/node-worker/runner.ts`** — `NodeWorkerEnvRunner` extends `BaseEnvRunner`: spawns Node.js Worker threads, data via `workerData`
@@ -65,8 +66,10 @@ src/
 2. Entry posts `{ address: { host, port } }` or `{ address: { socketPath } }` when ready
 3. `fetch()` proxies HTTP requests to the address via `httpxy` (retries with exponential backoff: 100ms → 1.6s, up to 5 attempts)
 4. `upgrade()` proxies WebSocket upgrades
-5. `sendMessage()` / `onMessage()` / `offMessage()` for bidirectional RPC
-6. `close()` sends shutdown event, waits for graceful exit (configurable via `ENV_RUNNER_SHUTDOWN_TIMEOUT`, default 5s, disabled in CI/test), then terminates
+5. `sendMessage()` / `onMessage()` / `offMessage()` for bidirectional messaging
+6. `waitForReady(timeout?)` returns a promise that resolves when the runner becomes ready (address received)
+7. `rpc(name, data?, opts?)` sends a request-response message over IPC (auto-generates ID, handles timeout, error propagation)
+8. `close()` sends shutdown event, waits for graceful exit (configurable via `ENV_RUNNER_SHUTDOWN_TIMEOUT`, default 5s, disabled in CI/test), then terminates
 
 Subclasses implement abstract methods: `sendMessage()`, `_hasRuntime()`, `_closeRuntime()`, `_runtimeType()`, and runtime init.
 
@@ -204,6 +207,7 @@ const runner2 = new NodeProcessEnvRunner({
 - `env-runner/runners/deno-process/worker` (`./runners/deno-process/worker`) — Built-in srvx worker for Deno process
 - `env-runner/runners/self` (`./runners/self`) — Direct import of `SelfEnvRunner`
 - `env-runner/runners/miniflare` (`./runners/miniflare`) — Direct import of `MiniflareEnvRunner`
+- `env-runner/vite` (`./vite`) — Vite Environment API helpers (`createViteHotChannel`, `createViteTransport`)
 
 ## Testing
 
@@ -211,9 +215,11 @@ const runner2 = new NodeProcessEnvRunner({
 - **`test/runners.test.ts`** — Parameterized test suite for all IPC-based runner implementations (NodeWorker, NodeProcess, BunProcess, DenoProcess). Runners requiring specific runtimes (bun, deno) are auto-skipped when the runtime is not available
 - **`test/manager.test.ts`** — Tests for `RunnerManager` lifecycle, hot-reload, message queueing, hook forwarding
 - **`test/miniflare.test.ts`** — Tests for `MiniflareEnvRunner`: Durable Object exports, IPC alongside custom exports, hot-reload via `reloadModule()`, IPC re-initialization after reload
+- **`test/vite.test.ts`** — Tests for Vite helpers: `createViteHotChannel` message namespacing/filtering/on/off, `createViteTransport` connect/send filtering
 - Test app fixture in `test/fixtures/app.mjs` — Minimal `export default { fetch }` entry for worker tests
+- Test app fixture in `test/fixtures/app-rpc.mjs` — Entry with RPC handler for `rpc()` method tests
 - Test fixture in `test/fixtures/worker-do.mjs` — Worker with Durable Object export + IPC for miniflare tests
-- Tests cover: lifecycle, fetch (GET/POST), messaging, hooks, graceful close, inspect output, manager hot-reload, message queueing, miniflare hot-reload
+- Tests cover: lifecycle, fetch (GET/POST), messaging, hooks, graceful close, inspect output, manager hot-reload, message queueing, miniflare hot-reload, waitForReady, vite helpers
 
 ## Scripts
 

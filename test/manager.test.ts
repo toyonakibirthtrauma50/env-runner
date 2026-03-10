@@ -206,6 +206,29 @@ describe("RunnerManager", () => {
     expect(messages).toHaveLength(2);
   });
 
+  it("waitForReady resolves when runner becomes ready", async () => {
+    const runner = createRunner("wait-ready");
+    runners.push(runner);
+    manager = new RunnerManager();
+
+    // Start waiting before attaching runner
+    const readyPromise = manager.waitForReady();
+    await manager.reload(runner);
+    await readyPromise;
+    expect(manager.ready).toBe(true);
+  });
+
+  it("waitForReady resolves immediately if already ready", async () => {
+    const runner = createRunner("wait-ready-immediate");
+    runners.push(runner);
+    manager = new RunnerManager(runner);
+    await waitForReady(manager);
+
+    // Should resolve immediately
+    await manager.waitForReady();
+    expect(manager.ready).toBe(true);
+  });
+
   it("close clears queue and shuts down runner", async () => {
     const runner = createRunner("close-cleanup");
     runners.push(runner);

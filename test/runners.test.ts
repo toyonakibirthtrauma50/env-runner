@@ -228,6 +228,20 @@ for (const runnerDef of runners) {
       expect(msg).toEqual({ type: "echo-reply", data: "hello-ipc" });
     });
 
+    it("waitForReady resolves when runner becomes ready", async () => {
+      runner = create(opts("test-wait-ready"));
+      await runner.waitForReady();
+      expect(runner.ready).toBe(true);
+    });
+
+    it("waitForReady resolves immediately if already ready", async () => {
+      runner = create(opts("test-wait-ready-imm"));
+      await waitForReady(runner);
+      // Already ready — should resolve immediately
+      await runner.waitForReady();
+      expect(runner.ready).toBe(true);
+    });
+
     it("inspect returns formatted string", async () => {
       runner = create(opts("test-inspect"));
       const pending = inspect(runner);
