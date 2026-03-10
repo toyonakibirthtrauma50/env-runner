@@ -61,6 +61,7 @@ let __ipcInitialized = false;
 let __serverWs;
 
 async function __loadEntry(env, path) {
+  globalThis.__ENV_RUNNER_UNSAFE_EVAL__ = env.__ENV_RUNNER_UNSAFE_EVAL__;
   const importFn = env.__ENV_RUNNER_UNSAFE_EVAL__.newAsyncFunction(
     "return await import(path)",
     "loadEntry",
