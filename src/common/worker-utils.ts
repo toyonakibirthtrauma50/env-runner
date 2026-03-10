@@ -1,6 +1,8 @@
 import type { ServerOptions, Server } from "srvx";
 import type { Hooks } from "crossws";
 import type { UpgradeContext } from "../types.ts";
+import { pathToFileURL } from "node:url";
+import { isAbsolute } from "node:path";
 
 export interface AppEntryIPCContext {
   sendMessage: (message: unknown) => void;
@@ -22,7 +24,8 @@ export interface AppEntry {
 }
 
 export async function resolveEntry(entryPath: string): Promise<AppEntry> {
-  const mod = await import(entryPath);
+  const importPath = _toImportPath(entryPath);
+  const mod = await import(importPath);
   const entry = mod.default || mod;
   if (typeof entry.fetch !== "function") {
     throw new Error(
@@ -56,4 +59,14 @@ export async function reloadEntryModule(
   await newEntry.ipc?.onOpen?.({ sendMessage });
 
   return newEntry;
+}
+
+function _toImportPath(entryPath: string): string {
+  const qIndex = entryPath.indexOf("?");
+  const filePath = qIndex === -1 ? entryPath : entryPath.slice(0, qIndex);
+  const query = qIndex === -1 ? "" : entryPath.slice(qIndex);
+  if (isAbsolute(filePath)) {
+    return pathToFileURL(filePath).href + query;
+  }
+  return entryPath;
 }
