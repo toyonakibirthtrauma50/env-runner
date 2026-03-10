@@ -11,11 +11,7 @@ export class SelfEnvRunner extends BaseEnvRunner {
   #active = false;
   #entry?: AppEntry;
 
-  constructor(opts: {
-    name: string;
-    hooks?: WorkerHooks;
-    data?: EnvRunnerData;
-  }) {
+  constructor(opts: { name: string; hooks?: WorkerHooks; data?: EnvRunnerData }) {
     super({ ...opts, workerEntry: "" });
     this.#init();
   }
@@ -34,9 +30,7 @@ export class SelfEnvRunner extends BaseEnvRunner {
     }
     // Handle ping/pong internally (no worker to relay to)
     if ((message as any)?.type === "ping") {
-      queueMicrotask(() =>
-        this._handleMessage({ type: "pong", data: (message as any).data }),
-      );
+      queueMicrotask(() => this._handleMessage({ type: "pong", data: (message as any).data }));
     }
   }
 
