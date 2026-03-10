@@ -114,6 +114,7 @@ async function __handleWsMessage(env, data) {
         await __userEntry.ipc.onClose();
       }
       __userEntry = newEntry;
+      __crosswsAdapter = undefined;
       __ipcInitialized = false;
       if (__userEntry.ipc?.onOpen) {
         __ipcInitialized = true;
@@ -132,6 +133,19 @@ async function __handleWsMessage(env, data) {
     }
     return;
   }
+}
+
+let __crosswsAdapter;
+
+async function __initCrossws(env, hooks) {
+  if (__crosswsAdapter) return __crosswsAdapter;
+  const importFn = env.__ENV_RUNNER_UNSAFE_EVAL__.newAsyncFunction(
+    "return await import('crossws/adapters/cloudflare')",
+    "loadCrossws"
+  );
+  const { default: cloudflareAdapter } = await importFn();
+  __crosswsAdapter = cloudflareAdapter({ hooks });
+  return __crosswsAdapter;
 }
 
 export default {
@@ -172,6 +186,13 @@ export default {
     if (!__userEntry) {
       return new Response("Worker not initialized", { status: 503 });
     }
+
+    // Handle WebSocket upgrade via crossws cloudflare adapter
+    if (__userEntry.websocket && request.headers.get("upgrade") === "websocket") {
+      const adapter = await __initCrossws(env, __userEntry.websocket);
+      return adapter.handleUpgrade(request, env, ctx);
+    }
+
     const entryFetch = __userEntry.fetch;
     if (!entryFetch) {
       return new Response("No fetch handler exported", { status: 500 });
