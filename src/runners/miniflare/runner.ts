@@ -260,10 +260,7 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       ...this.#miniflareOptions,
       compatibilityFlags: [...new Set(["nodejs_compat", ...userFlags])],
       // Expose a direct socket so we can proxy WebSocket upgrades via workerd
-      unsafeDirectSockets: [
-        { host: "127.0.0.1", port: 0 },
-        ...userDirectSockets,
-      ],
+      unsafeDirectSockets: [{ host: "127.0.0.1", port: 0 }, ...userDirectSockets],
     };
 
     // Generate in-memory wrapper module with IPC support
