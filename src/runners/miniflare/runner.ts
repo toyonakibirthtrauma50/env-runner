@@ -1,6 +1,8 @@
 import type { WorkerHooks } from "../../types.ts";
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { BaseEnvRunner } from "../../common/base-runner.ts";
 import type { EnvRunnerData } from "../../common/base-runner.ts";
 
@@ -19,6 +21,7 @@ const IPC_HEADER = "x-env-runner-ipc";
 export class MiniflareEnvRunner extends BaseEnvRunner {
   #miniflare?: InstanceType<any>;
   #miniflareOptions: Record<string, unknown>;
+  #tmpDir?: string;
 
   constructor(opts: MiniflareEnvRunnerOptions) {
     super({ ...opts, workerEntry: "" });
@@ -76,6 +79,10 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       .catch(() => {});
     await this.#miniflare.dispose();
     this.#miniflare = undefined;
+    if (this.#tmpDir) {
+      rmSync(this.#tmpDir, { recursive: true, force: true });
+      this.#tmpDir = undefined;
+    }
   }
 
   // #endregion
@@ -113,11 +120,12 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       },
     };
 
-    // Generate wrapper script with IPC support
-    if (entryPath && !options.script) {
-      const userCode = readFileSync(entryPath, "utf8");
-      options.script = wrapScript(userCode);
-      delete options.scriptPath;
+    // Generate wrapper module with IPC support
+    if (entryPath && !options.script && !options.scriptPath) {
+      this.#tmpDir = mkdtempSync(join(tmpdir(), "env-runner-mf-"));
+      const wrapperPath = join(this.#tmpDir, "worker.mjs");
+      writeFileSync(wrapperPath, generateWrapper(entryPath));
+      options.scriptPath = wrapperPath;
     }
 
     this.#miniflare = new Miniflare(options);
@@ -142,30 +150,21 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
 // #region Helpers
 
 /**
- * Wraps user module code with IPC glue.
+ * Generates a wrapper module that imports the user entry and adds IPC glue.
  *
- * The user module is expected to `export default { fetch, ipc? }`.
- * The wrapper renames the user's default export, intercepts IPC requests,
- * and bridges the `ipc` hooks via `env.__ENV_RUNNER_IPC` service binding.
+ * The user module is expected to export `fetch` and optionally `ipc`.
+ * The wrapper intercepts IPC requests and bridges `ipc` hooks
+ * via `env.__ENV_RUNNER_IPC` service binding.
  */
-function wrapScript(userCode: string): string {
-  // Replace `export default` or `export { x as default }` with a variable assignment so we can wrap it
-  const transformed = userCode
-    .replace(/export\s+default\s+/, "const __userEntry = ")
-    .replace(
-      /export\s*\{([^}]*?\b(\w+)\b\s+as\s+default\b[^}]*)\}/,
-      (_match, _inner, identifier) => `const __userEntry = ${identifier};`,
-    );
+function generateWrapper(entryPath: string): string {
+  return `import * as __userModule from ${JSON.stringify(entryPath)};
 
-  return `${transformed}
-
-// --- env-runner IPC glue ---
-let __ipcInitialized = false;
+const __userEntry = __userModule.default || __userModule;
 const __IPC_HEADER = "${IPC_HEADER}";
+let __ipcInitialized = false;
 
 export default {
   async fetch(request, env, ctx) {
-    // Handle IPC control messages from runner
     const ipcType = request.headers.get(__IPC_HEADER);
     if (ipcType) {
       if (ipcType === "init") {
@@ -198,9 +197,11 @@ export default {
       }
       return new Response(null, { status: 400 });
     }
-
-    // Delegate to user's fetch handler
-    return __userEntry.fetch(request, env, ctx);
+    const entryFetch = __userEntry.fetch;
+    if (!entryFetch) {
+      return new Response("No fetch handler exported", { status: 500 });
+    }
+    return entryFetch(request, env, ctx);
   }
 };
 `;
