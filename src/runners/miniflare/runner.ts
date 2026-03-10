@@ -1,8 +1,7 @@
 import type { WorkerHooks } from "../../types.ts";
 
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { join, dirname, relative } from "node:path";
 import { BaseEnvRunner } from "../../common/base-runner.ts";
 import type { EnvRunnerData } from "../../common/base-runner.ts";
 
@@ -122,9 +121,12 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
 
     // Generate wrapper module with IPC support
     if (entryPath && !options.script && !options.scriptPath) {
-      this.#tmpDir = mkdtempSync(join(tmpdir(), "env-runner-mf-"));
+      // Create temp dir next to entry so workerd can resolve the import
+      // (workerd forbids ".." traversal outside the script root)
+      this.#tmpDir = mkdtempSync(join(dirname(entryPath), ".env-runner-mf-"));
       const wrapperPath = join(this.#tmpDir, "worker.mjs");
-      writeFileSync(wrapperPath, generateWrapper(entryPath));
+      const relativeEntry = "./" + relative(this.#tmpDir, entryPath);
+      writeFileSync(wrapperPath, generateWrapper(relativeEntry));
       options.scriptPath = wrapperPath;
     }
 
@@ -157,7 +159,8 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
  * via `env.__ENV_RUNNER_IPC` service binding.
  */
 function generateWrapper(entryPath: string): string {
-  return `import * as __userModule from ${JSON.stringify(entryPath)};
+  return `export * from ${JSON.stringify(entryPath)};
+import * as __userModule from ${JSON.stringify(entryPath)};
 
 const __userEntry = __userModule.default || __userModule;
 const __IPC_HEADER = "${IPC_HEADER}";
