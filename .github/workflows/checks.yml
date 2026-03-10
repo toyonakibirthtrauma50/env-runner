@@ -17,3 +17,16 @@ jobs:
       - run: pnpm run lint
       # - uses: codecov/codecov-action@v5
       #   with: { token: "${{ secrets.CODECOV_TOKEN }}" }
+  checks-cross:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - run: npm i -fg corepack && corepack enable
+      - uses: actions/setup-node@v6
+        with: { node-version: lts/*, cache: "pnpm" }
+      - run: pnpm install
+      - run: pnpm run build
+      - run: pnpm vitest
