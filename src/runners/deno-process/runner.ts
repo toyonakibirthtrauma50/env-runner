@@ -56,15 +56,19 @@ export class DenoProcessEnvRunner extends BaseEnvRunner {
     if (!this.#process) {
       return;
     }
-    await this._requestGracefulShutdown(
-      () => this.#process!.send({ event: "shutdown" }),
-      (resolve) => {
-        this.#process?.exited.then(() => resolve());
-      },
-      () => this.#process?._exitCode != null,
-    );
+    if (this.#process._exitCode == null) {
+      await this._requestGracefulShutdown(
+        () => {
+          try { this.#process!.send({ event: "shutdown" }); } catch {}
+        },
+        (resolve) => {
+          this.#process?.exited.then(() => resolve());
+        },
+        () => this.#process?._exitCode != null,
+      );
+    }
     this.#process.removeAllListeners?.();
-    this.#process.kill();
+    try { this.#process.kill(); } catch {}
     this.#process = undefined;
   }
 
@@ -111,9 +115,11 @@ export class DenoProcessEnvRunner extends BaseEnvRunner {
       this.close(`process exited with code ${code}`);
     });
 
-    child.once("error", (error) => {
-      console.error(`Process error:`, error);
-      this.close(error);
+    child.on("error", (error) => {
+      if (!this.closed) {
+        console.error(`Process error:`, error);
+        this.close(error);
+      }
     });
 
     child.on("message", (message: any) => {

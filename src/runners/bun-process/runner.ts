@@ -1,7 +1,9 @@
 import type { WorkerHooks } from "../../types.ts";
 
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { BaseEnvRunner } from "../../common/base-runner.ts";
@@ -10,6 +12,7 @@ import type { EnvRunnerData } from "../../common/base-runner.ts";
 export type { EnvRunnerData as BunProcessEnvRunnerData } from "../../common/base-runner.ts";
 
 let _defaultEntry: string;
+let _bunPath: string | undefined;
 
 interface ProcessHandle {
   pid: number;
@@ -22,6 +25,26 @@ interface ProcessHandle {
 
 // @ts-expect-error Bun global
 const _isBun = typeof Bun !== "undefined";
+
+function resolveBunPath(): string {
+  if (_bunPath) return _bunPath;
+  // Check common locations
+  const candidates = [
+    join(homedir(), ".bun", "bin", "bun"),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      return (_bunPath = p);
+    }
+  }
+  // Try to find via `which`
+  try {
+    const resolved = execSync("which bun", { encoding: "utf8" }).trim();
+    if (resolved) return (_bunPath = resolved);
+  } catch {}
+  // Fallback to bare "bun" and hope PATH has it
+  return (_bunPath = "bun");
+}
 
 export class BunProcessEnvRunner extends BaseEnvRunner {
   #process?: ProcessHandle;
@@ -59,15 +82,19 @@ export class BunProcessEnvRunner extends BaseEnvRunner {
     if (!this.#process) {
       return;
     }
-    await this._requestGracefulShutdown(
-      () => this.#process!.send({ event: "shutdown" }),
-      (resolve) => {
-        this.#process?.exited.then(() => resolve());
-      },
-      () => this.#process?._exitCode != null,
-    );
+    if (this.#process._exitCode == null) {
+      await this._requestGracefulShutdown(
+        () => {
+          try { this.#process!.send({ event: "shutdown" }); } catch {}
+        },
+        (resolve) => {
+          this.#process?.exited.then(() => resolve());
+        },
+        () => this.#process?._exitCode != null,
+      );
+    }
     this.#process.removeAllListeners?.();
-    this.#process.kill();
+    try { this.#process.kill(); } catch {}
     this.#process = undefined;
   }
 
@@ -97,7 +124,7 @@ export class BunProcessEnvRunner extends BaseEnvRunner {
   #initBunProcess(execArgv: string[] | undefined, env: Record<string, string | undefined>) {
     // @ts-expect-error Bun global
     const proc = Bun.spawn({
-      cmd: ["bun", ...(execArgv || []), this._workerEntry],
+      cmd: [resolveBunPath(), ...(execArgv || []), this._workerEntry],
       env,
       stdio: ["pipe", "pipe", "pipe"],
       ipc: (message: any) => {
@@ -123,7 +150,7 @@ export class BunProcessEnvRunner extends BaseEnvRunner {
 
   #initNodeProcess(execArgv: string[] | undefined, env: Record<string, string | undefined>) {
     // Spawn a Bun child process even when the host is Node.js
-    const child = spawn("bun", [...(execArgv || []), this._workerEntry], {
+    const child = spawn(resolveBunPath(), [...(execArgv || []), this._workerEntry], {
       env,
       stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
@@ -146,9 +173,11 @@ export class BunProcessEnvRunner extends BaseEnvRunner {
       this.close(`process exited with code ${code}`);
     });
 
-    child.once("error", (error) => {
-      console.error(`Process error:`, error);
-      this.close(error);
+    child.on("error", (error) => {
+      if (!this.closed) {
+        console.error(`Process error:`, error);
+        this.close(error);
+      }
     });
 
     child.on("message", (message: any) => {
