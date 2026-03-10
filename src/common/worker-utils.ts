@@ -3,6 +3,7 @@ import type { Hooks } from "crossws";
 import type { UpgradeContext } from "../types.ts";
 import { pathToFileURL } from "node:url";
 import { isAbsolute } from "node:path";
+import { readFileSync } from "node:fs";
 
 export interface AppEntryIPCContext {
   sendMessage: (message: unknown) => void;
@@ -52,8 +53,8 @@ export async function reloadEntryModule(
   // Tear down old IPC
   await currentEntry.ipc?.onClose?.();
 
-  // Re-import with cache-busting query string
-  const newEntry = await resolveEntry(entryPath + "?t=" + Date.now());
+  // Re-import with fresh content via data: URL to bypass module cache across all runtimes
+  const newEntry = await _importFresh(entryPath);
 
   // Re-initialize IPC
   await newEntry.ipc?.onOpen?.({ sendMessage });
@@ -69,4 +70,17 @@ function _toImportPath(entryPath: string): string {
     return pathToFileURL(filePath).href + query;
   }
   return entryPath;
+}
+
+async function _importFresh(entryPath: string): Promise<AppEntry> {
+  const code = readFileSync(entryPath, "utf8");
+  const dataUrl = "data:text/javascript;base64," + Buffer.from(code).toString("base64");
+  const mod = await import(dataUrl);
+  const entry = mod.default || mod;
+  if (typeof entry.fetch !== "function") {
+    throw new Error(
+      `[env-runner] Entry module "${entryPath}" must export a \`fetch\` handler (export default { fetch(req) { ... } }).`,
+    );
+  }
+  return entry as AppEntry;
 }
