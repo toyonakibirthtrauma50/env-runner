@@ -1,6 +1,26 @@
 # Changelog
 
 
+## v0.1.6
+
+[compare changes](https://github.com/unjs/env-runner/compare/v0.1.5...v0.1.6)
+
+### 🚀 Enhancements
+
+- **manager:** Replace callback properties with multi-listener event pattern ([76d8cda](https://github.com/unjs/env-runner/commit/76d8cda))
+
+### 💅 Refactors
+
+- Remove graceful shutdowns ([6e969b1](https://github.com/unjs/env-runner/commit/6e969b1))
+
+### 🏡 Chore
+
+- Update lock ([5c5ae67](https://github.com/unjs/env-runner/commit/5c5ae67))
+
+### ❤️ Contributors
+
+- Pooya Parsa ([@pi0](https://github.com/pi0))
+
 ## v0.1.5
 
 [compare changes](https://github.com/unjs/env-runner/compare/v0.1.4...v0.1.5)
