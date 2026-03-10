@@ -18,6 +18,12 @@ const server = serve({
 
 await server.ready();
 
+if (entry.upgrade) {
+  server.node?.server?.on("upgrade", (req, socket, head) => {
+    entry.upgrade!({ node: { req, socket, head } });
+  });
+}
+
 if (entry.ipc) {
   await entry.ipc.onOpen?.({ sendMessage });
 }

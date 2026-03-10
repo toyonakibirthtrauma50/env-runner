@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
 import { resolve, dirname, join } from "node:path";
@@ -350,6 +352,93 @@ export default {
       runner.sendMessage({ type: "echo" });
       expect(await reply).toEqual({ type: "echo-reply", version: 2 });
     });
+  });
+}
+
+// --- upgrade tests ---
+
+const appUpgradeEntry = resolve(_dir, "./fixtures/app-upgrade.mjs");
+
+const upgradeRunners = [
+  { name: "NodeWorkerEnvRunner", create: (opts: any) => new NodeWorkerEnvRunner(opts) },
+  { name: "NodeProcessEnvRunner", create: (opts: any) => new NodeProcessEnvRunner(opts) },
+  {
+    name: "SelfEnvRunner",
+    create: (opts: any) => new SelfEnvRunner(opts),
+    selfRunner: true,
+  },
+];
+
+for (const { name, create, selfRunner } of upgradeRunners) {
+  describe(`${name} upgrade`, () => {
+    let runner: EnvRunner | undefined;
+
+    afterEach(async () => {
+      await runner?.close();
+      runner = undefined;
+    });
+
+    if (selfRunner) {
+      it("calls entry.upgrade directly", async () => {
+        runner = create({ name: "test-upgrade", data: { entry: appUpgradeEntry } });
+        await runner.waitForReady();
+
+        // For SelfEnvRunner, verify upgrade is callable with mock objects
+        const { PassThrough } = await import("node:stream");
+        const socket = new PassThrough();
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+        const mockReq = {
+          headers: { "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" },
+        };
+
+        runner.upgrade!({
+          node: { req: mockReq as any, socket: socket as any, head: Buffer.alloc(0) },
+        });
+
+        await new Promise((r) => setTimeout(r, 50));
+        const written = Buffer.concat(chunks).toString();
+        expect(written).toContain("101 Switching Protocols");
+      });
+    } else {
+      it("handles WebSocket upgrade via worker", async () => {
+        let address: any;
+        runner = create({
+          name: "test-upgrade",
+          data: { entry: appUpgradeEntry },
+          hooks: {
+            onReady: (_: any, addr: any) => {
+              address = addr;
+            },
+          },
+        });
+        await runner.waitForReady();
+        expect(address).toBeDefined();
+
+        // Send an HTTP upgrade request to the worker's server directly
+        const host = address.host || "127.0.0.1";
+        const res = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
+          const req = httpRequest({
+            hostname: host,
+            port: address.port,
+            path: "/",
+            headers: {
+              "Sec-WebSocket-Version": "13",
+              "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
+              Connection: "Upgrade",
+              Upgrade: "websocket",
+            },
+          });
+          req.on("upgrade", (res) => resolve(res));
+          req.on("error", reject);
+          req.end();
+          setTimeout(() => reject(new Error("Upgrade timeout")), 3000);
+        });
+
+        expect(res.headers["x-upgraded"]).toBe("true");
+      });
+    }
   });
 }
 

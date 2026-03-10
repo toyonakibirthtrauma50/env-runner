@@ -375,6 +375,10 @@ export default {
   fetch(request: Request) {
     return new Response("Hello!");
   },
+  upgrade(context) {
+    // Optional: handle WebSocket upgrade requests (Node.js only)
+    // context.node gives { req, socket, head }
+  },
   middleware: [], // Optional srvx middleware
   plugins: [], // Optional srvx plugins
   ipc: {

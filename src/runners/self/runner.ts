@@ -24,6 +24,13 @@ export class SelfEnvRunner extends BaseEnvRunner {
     return this.#entry.fetch(request) as Promise<Response>;
   }
 
+  override async upgrade(context: { node: { req: import("node:http").IncomingMessage; socket: import("node:net").Socket; head: any } }) {
+    if (!this.#entry?.upgrade || this.closed) {
+      return;
+    }
+    this.#entry.upgrade(context);
+  }
+
   sendMessage(message: unknown) {
     if (!this.#active) {
       throw new Error("Self env runner should be initialized before sending messages.");

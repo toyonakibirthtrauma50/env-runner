@@ -1,4 +1,5 @@
 import type { ServerOptions, Server } from "srvx";
+import type { UpgradeContext } from "../types.ts";
 
 export interface AppEntryIPCContext {
   sendMessage: (message: unknown) => void;
@@ -12,6 +13,7 @@ export interface AppEntryIPC {
 
 export interface AppEntry {
   fetch: ServerOptions["fetch"];
+  upgrade?: (context: UpgradeContext) => void;
   middleware?: ServerOptions["middleware"];
   plugins?: ServerOptions["plugins"];
   ipc?: AppEntryIPC;
