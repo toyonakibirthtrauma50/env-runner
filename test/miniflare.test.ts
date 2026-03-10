@@ -249,6 +249,203 @@ describe("MiniflareEnvRunner (transformRequest)", () => {
   });
 });
 
+describe("MiniflareEnvRunner (auto-detect exports)", () => {
+  let runner: MiniflareEnvRunner | undefined;
+  let tmpDir: string | undefined;
+
+  afterEach(async () => {
+    await runner?.close();
+    runner = undefined;
+    if (tmpDir) {
+      rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = undefined;
+    }
+  });
+
+  it("auto-detects Durable Object exports and wires bindings", async () => {
+    tmpDir = mkdtempSync(join(_dir, ".tmp-auto-do-"));
+    const entryPath = join(tmpDir, "worker.mjs");
+
+    // Entry uses the class name as the binding name (auto-detect convention)
+    writeFileSync(
+      entryPath,
+      `
+export class Counter {
+  constructor(state) { this.storage = state.storage; }
+  async fetch(request) {
+    const url = new URL(request.url);
+    let value = (await this.storage.get("count")) || 0;
+    if (url.pathname === "/increment") { value++; await this.storage.put("count", value); }
+    return Response.json({ count: value });
+  }
+}
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/counter")) {
+      const id = env.COUNTER.idFromName("test");
+      const stub = env.COUNTER.get(id);
+      const subPath = url.pathname.slice("/counter".length) || "/";
+      return stub.fetch(new Request(new URL(subPath, url.origin), request));
+    }
+    return new Response("ok");
+  },
+};`,
+    );
+
+    // No manual durableObjects config — auto-detected from `export class Counter`
+    runner = new MiniflareEnvRunner({
+      name: "test-auto-do",
+      data: { entry: entryPath },
+    });
+    await waitForReady(runner);
+
+    const res1 = await runner.fetch("http://localhost/counter/increment");
+    expect(res1.status).toBe(200);
+    expect(await res1.json()).toEqual({ count: 1 });
+
+    const res2 = await runner.fetch("http://localhost/counter/increment");
+    expect(res2.status).toBe(200);
+    expect(await res2.json()).toEqual({ count: 2 });
+  });
+
+  it("skips auto-detection when exports is false", async () => {
+    runner = new MiniflareEnvRunner({
+      name: "test-no-auto-do",
+      data: { entry: workerDoEntry },
+      exports: false,
+    });
+    await waitForReady(runner);
+
+    // Without DO binding, accessing env.COUNTER will fail
+    const res = await runner.fetch("http://localhost/counter/increment");
+    expect(res.status).toBe(500);
+  });
+});
+
+describe("MiniflareEnvRunner (error capture)", () => {
+  let runner: MiniflareEnvRunner | undefined;
+  let tmpDir: string | undefined;
+
+  afterEach(async () => {
+    await runner?.close();
+    runner = undefined;
+    if (tmpDir) {
+      rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = undefined;
+    }
+  });
+
+  it("returns structured JSON error when fetch throws", async () => {
+    tmpDir = mkdtempSync(join(_dir, ".tmp-error-"));
+    const entryPath = join(tmpDir, "worker.mjs");
+
+    writeFileSync(entryPath, `export default { fetch() { throw new Error("test boom"); } };`);
+
+    runner = new MiniflareEnvRunner({
+      name: "test-error-capture",
+      data: { entry: entryPath },
+    });
+    await waitForReady(runner);
+
+    const res = await runner.fetch("http://localhost/");
+    expect(res.status).toBe(500);
+    expect(res.headers.get("X-Env-Runner-Error")).toBe("1");
+    const body = await res.json();
+    expect(body.error).toBe("test boom");
+    expect(body.name).toBe("Error");
+    expect(body.stack).toBeTruthy();
+  });
+
+  it("does not capture errors when captureErrors is false", async () => {
+    tmpDir = mkdtempSync(join(_dir, ".tmp-error-"));
+    const entryPath = join(tmpDir, "worker.mjs");
+
+    writeFileSync(entryPath, `export default { fetch() { throw new Error("raw boom"); } };`);
+
+    runner = new MiniflareEnvRunner({
+      name: "test-no-capture",
+      data: { entry: entryPath },
+      captureErrors: false,
+    });
+    await waitForReady(runner);
+
+    const res = await runner.fetch("http://localhost/");
+    // Without capture, workerd returns its own 500 error (not our structured one)
+    expect(res.status).toBe(500);
+    expect(res.headers.get("X-Env-Runner-Error")).toBeNull();
+  });
+});
+
+describe("MiniflareEnvRunner (persistent)", () => {
+  let tmpDir: string | undefined;
+
+  afterEach(async () => {
+    await MiniflareEnvRunner.disposeAll();
+    if (tmpDir) {
+      rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = undefined;
+    }
+  });
+
+  it("reuses Miniflare instance across runner swaps", async () => {
+    tmpDir = mkdtempSync(join(_dir, ".tmp-persistent-"));
+    const entryPath = join(tmpDir, "worker.mjs");
+
+    writeFileSync(entryPath, `export default { fetch() { return new Response("v1"); } };`);
+
+    const runner1 = new MiniflareEnvRunner({
+      name: "test-persistent-1",
+      data: { entry: entryPath },
+      persistent: true,
+    });
+    await waitForReady(runner1);
+
+    const res1 = await runner1.fetch("http://localhost/");
+    expect(await res1.text()).toBe("v1");
+
+    // Close runner1 (but Miniflare stays alive due to persistent mode)
+    await runner1.close();
+
+    // Update entry
+    writeFileSync(entryPath, `export default { fetch() { return new Response("v2"); } };`);
+
+    // Create runner2 with same config — should reuse Miniflare instance
+    const runner2 = new MiniflareEnvRunner({
+      name: "test-persistent-2",
+      data: { entry: entryPath },
+      persistent: true,
+    });
+    await waitForReady(runner2);
+
+    // New WebSocket IPC is established, entry is reloaded
+    const res2 = await runner2.fetch("http://localhost/");
+    expect(await res2.text()).toBe("v2");
+
+    await runner2.close();
+  });
+
+  it("dispose() fully destroys persistent instance", async () => {
+    tmpDir = mkdtempSync(join(_dir, ".tmp-persistent-"));
+    const entryPath = join(tmpDir, "worker.mjs");
+
+    writeFileSync(entryPath, `export default { fetch() { return new Response("ok"); } };`);
+
+    const runner = new MiniflareEnvRunner({
+      name: "test-dispose",
+      data: { entry: entryPath },
+      persistent: true,
+    });
+    await waitForReady(runner);
+
+    const res = await runner.fetch("http://localhost/");
+    expect(await res.text()).toBe("ok");
+
+    await runner.dispose();
+    expect(runner.closed).toBe(true);
+  });
+});
+
 // --- Helpers ---
 
 function waitForReady(runner: EnvRunner, timeout = 5000): Promise<void> {

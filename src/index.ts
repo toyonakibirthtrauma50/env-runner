@@ -22,6 +22,7 @@ export {
 } from "./runners/deno-process/runner.ts";
 export {
   type TransformResult,
+  type MiniflareExportInfo,
   type MiniflareEnvRunnerOptions,
   MiniflareEnvRunner,
 } from "./runners/miniflare/runner.ts";

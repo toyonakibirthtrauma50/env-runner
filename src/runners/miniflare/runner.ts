@@ -5,12 +5,18 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { BaseEnvRunner } from "../../common/base-runner.ts";
 import type { EnvRunnerData } from "../../common/base-runner.ts";
+import { generateWrapper } from "./wrapper.ts";
 
 export type { EnvRunnerData as MiniflareEnvRunnerData } from "../../common/base-runner.ts";
 
 /** Result from a module transform (compatible with Vite's `TransformResult`). */
 export interface TransformResult {
   code: string;
+}
+
+/** Detected or declared export for auto-wiring Durable Object / Entrypoint bindings. */
+export interface MiniflareExportInfo {
+  type?: "DurableObject" | "WorkerEntrypoint" | "class";
 }
 
 export interface MiniflareEnvRunnerOptions {
@@ -30,9 +36,29 @@ export interface MiniflareEnvRunnerOptions {
    * @returns Transformed code, or null/undefined to fall back to raw disk read
    */
   transformRequest?: (id: string) => Promise<TransformResult | null | undefined>;
+  /**
+   * Declare named exports (Durable Objects, WorkerEntrypoints) to auto-wire
+   * bindings and generate re-exports in the wrapper module.
+   *
+   * When set to `true`, `export class` declarations are auto-detected from
+   * the entry file. When set to a record, the listed exports are used
+   * (merged with auto-detected ones). Disabled by default.
+   */
+  exports?: Record<string, MiniflareExportInfo> | boolean;
+  /**
+   * When `true`, the Miniflare instance is cached and reused across runner
+   * swaps (e.g. via `RunnerManager.reload()`). `close()` tears down IPC but
+   * keeps Miniflare alive. Call `dispose()` to fully destroy it.
+   */
+  persistent?: boolean;
+  /** Wrap the user's `fetch` in a try/catch that returns structured JSON error responses. Default: `true`. */
+  captureErrors?: boolean;
 }
 
 const IPC_PATH = "/__env_runner_ipc";
+
+// Module-level cache for persistent Miniflare instances
+const _miniflareCache = new Map<string, { mf: InstanceType<any>; refCount: number }>();
 
 export class MiniflareEnvRunner extends BaseEnvRunner {
   #miniflare?: InstanceType<any>;
@@ -40,12 +66,47 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
   #transformRequest?: (id: string) => Promise<TransformResult | null | undefined>;
   #reloadCounter = 0;
   #ws?: { send(data: string): void; close(): void };
+  #persistent: boolean;
+  #cacheKey?: string;
+  #exports: Record<string, MiniflareExportInfo> | boolean;
+  #captureErrors: boolean;
 
   constructor(opts: MiniflareEnvRunnerOptions) {
     super({ ...opts, workerEntry: "" });
     this.#miniflareOptions = opts.miniflareOptions || {};
     this.#transformRequest = opts.transformRequest;
+    this.#persistent = opts.persistent ?? false;
+    this.#exports = opts.exports ?? {};
+    this.#captureErrors = opts.captureErrors ?? true;
     this.#init();
+  }
+
+  /** Dispose all persistent Miniflare instances from the cache. */
+  static async disposeAll() {
+    const entries = [..._miniflareCache.values()];
+    _miniflareCache.clear();
+    for (const entry of entries) {
+      await entry.mf.dispose().catch(() => {});
+    }
+  }
+
+  /** Fully dispose the Miniflare instance (even if persistent). */
+  async dispose() {
+    if (this.#miniflare) {
+      if (this.#ws) {
+        this.#ws.send(JSON.stringify({ type: "shutdown" }));
+        this.#ws.close();
+        this.#ws = undefined;
+      }
+      if (this.#cacheKey) {
+        _miniflareCache.delete(this.#cacheKey);
+      }
+      await this.#miniflare.dispose();
+      this.#miniflare = undefined;
+    }
+    if (!this.closed) {
+      await this.close();
+    }
   }
 
   override async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
@@ -128,7 +189,18 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       this.#ws.close();
       this.#ws = undefined;
     }
-    await this.#miniflare.dispose();
+    if (this.#persistent && this.#cacheKey) {
+      const cached = _miniflareCache.get(this.#cacheKey);
+      if (cached) {
+        cached.refCount--;
+        if (cached.refCount <= 0) {
+          _miniflareCache.delete(this.#cacheKey);
+          await this.#miniflare.dispose();
+        }
+      }
+    } else {
+      await this.#miniflare.dispose();
+    }
     this.#miniflare = undefined;
   }
 
@@ -161,7 +233,33 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       const resolvedEntry = resolve(entryPath);
       const entryDir = dirname(resolvedEntry);
 
-      options.script = generateWrapper(resolvedEntry, { dynamicOnly: Boolean(this.#transformRequest) });
+      // Auto-detect exported classes from entry file (opt-in)
+      const detectedExports =
+        this.#exports === false || this.#exports === undefined
+          ? []
+          : detectExportedClasses(
+              resolvedEntry,
+              typeof this.#exports === "object" ? this.#exports : {},
+            );
+
+      // Auto-wire durableObjects bindings for detected/declared exports
+      if (detectedExports.length > 0 && !options.durableObjects) {
+        const userDOs = (this.#miniflareOptions.durableObjects as Record<string, string>) || {};
+        const autoDOs: Record<string, string> = { ...userDOs };
+        for (const name of detectedExports) {
+          const bindingName = toScreamingSnakeCase(name);
+          if (!autoDOs[bindingName]) {
+            autoDOs[bindingName] = name;
+          }
+        }
+        options.durableObjects = autoDOs;
+      }
+
+      options.script = generateWrapper(resolvedEntry, {
+        dynamicOnly: Boolean(this.#transformRequest),
+        captureErrors: this.#captureErrors,
+        exports: detectedExports,
+      });
       options.scriptPath = entryDir + "/__env_runner_wrapper.mjs";
       // Use "/" as modulesRoot so absolute paths don't produce ".." relative paths
       if (!options.modulesRoot) {
@@ -279,9 +377,23 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
       }
     }
 
-    this.#miniflare = new Miniflare(options);
+    // Persistent Miniflare: reuse cached instance if available
+    if (this.#persistent && entryPath) {
+      this.#cacheKey = computeCacheKey(entryPath, this.#miniflareOptions);
+      const cached = _miniflareCache.get(this.#cacheKey);
+      if (cached) {
+        this.#miniflare = cached.mf;
+        cached.refCount++;
+      }
+    }
 
-    await this.#miniflare.ready;
+    if (!this.#miniflare) {
+      this.#miniflare = new Miniflare(options);
+      await this.#miniflare.ready;
+      if (this.#persistent && this.#cacheKey) {
+        _miniflareCache.set(this.#cacheKey, { mf: this.#miniflare, refCount: 1 });
+      }
+    }
 
     // Establish persistent WebSocket connection for IPC
     const initRes = await this.#miniflare.dispatchFetch("http://localhost" + IPC_PATH, {
@@ -314,136 +426,41 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
 // #region Helpers
 
 /**
- * Generates a wrapper module that imports the user entry and adds IPC glue.
- *
- * The user module is expected to export `fetch` and optionally `ipc`.
- * The wrapper uses a persistent WebSocket pair for bidirectional IPC:
- * - Init: `fetch` with `upgrade: websocket` creates a WebSocketPair
- * - Messages: JSON over the WebSocket (no per-message `dispatchFetch`)
- * - Reload: `{ type: "reload" }` triggers cache-busted re-import
- * - Shutdown: `{ type: "shutdown" }` calls `ipc.onClose()`
- *
- * Passed as an in-memory `script` to Miniflare (no temp files needed).
+ * Detect `export class` declarations in the entry file.
+ * Merges with explicitly declared exports from options.
  */
-function generateWrapper(
+function detectExportedClasses(
   entryPath: string,
-  opts?: { dynamicOnly?: boolean },
-): string {
-  // When dynamicOnly is set, skip static `export *` to avoid miniflare's
-  // ModuleLocator walking the entry's import tree at startup. All module
-  // loading goes through dynamic import() via unsafeEvalBinding instead.
-  const staticReExport = opts?.dynamicOnly ? "" : `export * from ${JSON.stringify(entryPath)};`;
-  return /* js */ `import __process from "node:process";
-if (!globalThis.process) { globalThis.process = __process; }
-${staticReExport}
-
-const __IPC_PATH = "${IPC_PATH}";
-const __entryPath = ${JSON.stringify(entryPath)};
-let __userEntry;
-let __ipcInitialized = false;
-let __serverWs;
-
-async function __loadEntry(env, path) {
-  const importFn = env.__ENV_RUNNER_UNSAFE_EVAL__.newAsyncFunction(
-    "return await import(path)",
-    "loadEntry",
-    "path"
-  );
-  const mod = await importFn(path);
-  return mod.default || mod;
+  explicit: Record<string, MiniflareExportInfo>,
+): string[] {
+  const names = new Set(Object.keys(explicit));
+  try {
+    const source = readFileSync(entryPath, "utf8");
+    const re = /\bexport\s+class\s+(\w+)/g;
+    let match;
+    while ((match = re.exec(source))) {
+      if (match[1]) names.add(match[1]);
+    }
+  } catch {
+    // Entry might not exist yet (e.g. generated at build time)
+  }
+  return [...names];
 }
 
-function __sendMessage(message) {
-  if (__serverWs) {
-    __serverWs.send(JSON.stringify(message));
-  }
+/** Convert PascalCase/camelCase to SCREAMING_SNAKE_CASE (e.g. `Counter` → `COUNTER`, `MyDurableObject` → `MY_DURABLE_OBJECT`). */
+function toScreamingSnakeCase(name: string): string {
+  return name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
 }
 
-async function __handleWsMessage(env, data) {
-  let msg;
-  try { msg = JSON.parse(data); } catch { return; }
-
-  if (msg.type === "message") {
-    if (__userEntry?.ipc?.onMessage) {
-      __userEntry.ipc.onMessage(msg.data);
+/** Compute a stable cache key for persistent Miniflare instances. */
+function computeCacheKey(entryPath: string, opts: Record<string, unknown>): string {
+  const serializableOpts: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(opts)) {
+    if (typeof v !== "function") {
+      serializableOpts[k] = v;
     }
-    return;
   }
-
-  if (msg.type === "reload" && env.__ENV_RUNNER_UNSAFE_EVAL__) {
-    const version = msg.version || 0;
-    try {
-      const newEntry = await __loadEntry(env, __entryPath + "?t=" + version);
-      if (__userEntry?.ipc?.onClose) {
-        await __userEntry.ipc.onClose();
-      }
-      __userEntry = newEntry;
-      __ipcInitialized = false;
-      if (__userEntry.ipc?.onOpen) {
-        __ipcInitialized = true;
-        await __userEntry.ipc.onOpen({ sendMessage: __sendMessage });
-      }
-      __sendMessage({ event: "module-reloaded" });
-    } catch (e) {
-      __sendMessage({ event: "module-reloaded", error: String(e) });
-    }
-    return;
-  }
-
-  if (msg.type === "shutdown") {
-    if (__userEntry?.ipc?.onClose) {
-      await __userEntry.ipc.onClose();
-    }
-    return;
-  }
-}
-
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    // WebSocket IPC handshake
-    if (url.pathname === __IPC_PATH && request.headers.get("upgrade") === "websocket") {
-      try {
-        if (!__userEntry) {
-          __userEntry = await __loadEntry(env, __entryPath);
-        }
-      } catch (e) {
-        return new Response("Failed to load entry: " + String(e), { status: 500 });
-      }
-
-      const pair = new WebSocketPair();
-      const client = pair[0];
-      const server = pair[1];
-      server.accept();
-      __serverWs = server;
-
-      server.addEventListener("message", (event) => {
-        __handleWsMessage(env, event.data);
-      });
-
-      // Initialize IPC hooks
-      if (!__ipcInitialized && __userEntry.ipc) {
-        __ipcInitialized = true;
-        if (__userEntry.ipc.onOpen) {
-          await __userEntry.ipc.onOpen({ sendMessage: __sendMessage });
-        }
-      }
-
-      return new Response(null, { status: 101, webSocket: client });
-    }
-
-    if (!__userEntry) {
-      return new Response("Worker not initialized", { status: 503 });
-    }
-    const entryFetch = __userEntry.fetch;
-    if (!entryFetch) {
-      return new Response("No fetch handler exported", { status: 500 });
-    }
-    return entryFetch(request, env, ctx);
-  }
-};
-`;
+  return `${resolve(entryPath)}::${JSON.stringify(serializableOpts)}`;
 }
 
 // #endregion

@@ -8,3 +8,4 @@ tsconfig.tsbuildinfo
 *.log*
 *.env*
 deno.lock
+**/.tmp-*

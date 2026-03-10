@@ -160,14 +160,14 @@ await runner.close();
 
 **Available runners:**
 
-| Runner                 | Isolation                      | IPC mechanism                       |
-| ---------------------- | ------------------------------ | ----------------------------------- |
-| `NodeWorkerEnvRunner`  | Worker thread                  | `workerData` / `parentPort`         |
-| `NodeProcessEnvRunner` | Child process (`fork`)         | `ENV_RUNNER_DATA` / `process.send`  |
-| `BunProcessEnvRunner`  | Bun or Node.js process         | `Bun.spawn` IPC or `fork()`         |
-| `DenoProcessEnvRunner` | Deno process                   | `deno run` with IPC channel         |
-| `SelfEnvRunner`        | In-process                     | In-memory channel                   |
-| `MiniflareEnvRunner`   | Cloudflare Workers (miniflare) | WebSocket pair via `dispatchFetch`   |
+| Runner                 | Isolation                      | IPC mechanism                      |
+| ---------------------- | ------------------------------ | ---------------------------------- |
+| `NodeWorkerEnvRunner`  | Worker thread                  | `workerData` / `parentPort`        |
+| `NodeProcessEnvRunner` | Child process (`fork`)         | `ENV_RUNNER_DATA` / `process.send` |
+| `BunProcessEnvRunner`  | Bun or Node.js process         | `Bun.spawn` IPC or `fork()`        |
+| `DenoProcessEnvRunner` | Deno process                   | `deno run` with IPC channel        |
+| `SelfEnvRunner`        | In-process                     | In-memory channel                  |
+| `MiniflareEnvRunner`   | Cloudflare Workers (miniflare) | WebSocket pair via `dispatchFetch` |
 
 #### Miniflare Runner
 
@@ -217,6 +217,77 @@ When `transformRequest` is provided:
 - Static `export *` re-exports are skipped in the wrapper to avoid miniflare's ModuleLocator pre-walking the import tree
 
 The callback should return `{ code: string }` for transformed modules, or `null`/`undefined` to fall back to the default raw file read.
+
+#### Auto-detected Exports
+
+`MiniflareEnvRunner` automatically scans the entry file for `export class` declarations and wires them as Durable Object bindings (binding name = class name). This means you don't need to manually configure `miniflareOptions.durableObjects` for simple cases:
+
+```ts
+// worker.ts
+export class Counter {
+  /* ... Durable Object implementation ... */
+}
+
+export default {
+  async fetch(request, env) {
+    // env.Counter is auto-wired — no manual config needed
+    const id = env.Counter.idFromName("test");
+    const stub = env.Counter.get(id);
+    return stub.fetch(request);
+  },
+};
+```
+
+To explicitly declare exports or override auto-detection:
+
+```ts
+const runner = new MiniflareEnvRunner({
+  name: "my-worker",
+  data: { entry: "./worker.ts" },
+  // Explicit exports (merged with auto-detected ones)
+  exports: { Counter: { type: "DurableObject" } },
+});
+```
+
+Set `exports: false` to disable auto-detection entirely.
+
+#### Error Capture
+
+By default, the runner wraps the user's `fetch` handler in a try/catch that returns structured JSON error responses with preserved stack traces:
+
+```json
+{
+  "error": "Cannot read properties of undefined",
+  "stack": "Error: Cannot read properties...\n    at fetch (worker.ts:10:5)",
+  "name": "TypeError"
+}
+```
+
+Error responses include `Content-Type: application/json` and `X-Env-Runner-Error: 1` headers. Disable with `captureErrors: false`.
+
+#### Persistent Miniflare
+
+By default, `close()` disposes the Miniflare instance. With `persistent: true`, the Miniflare instance is cached and reused across runner swaps — only the IPC connection is re-established:
+
+```ts
+const runner1 = new MiniflareEnvRunner({
+  name: "my-worker",
+  data: { entry: "./worker.ts" },
+  persistent: true,
+});
+
+// Later, after close() + creating a new runner with the same config,
+// the Miniflare instance is reused (faster startup)
+await runner1.close();
+
+const runner2 = new MiniflareEnvRunner({
+  name: "my-worker",
+  data: { entry: "./worker.ts" },
+  persistent: true,
+});
+
+// Fully destroy: runner.dispose() or MiniflareEnvRunner.disposeAll()
+```
 
 ### Vite Environment API
 
