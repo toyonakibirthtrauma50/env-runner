@@ -148,8 +148,14 @@ export class MiniflareEnvRunner extends BaseEnvRunner {
  * and bridges the `ipc` hooks via `env.__ENV_RUNNER_IPC` service binding.
  */
 function wrapScript(userCode: string): string {
-  // Replace `export default` with a variable assignment so we can wrap it
-  const transformed = userCode.replace(/export\s+default\s+/, "const __userEntry = ");
+  // Replace `export default` or `export { x as default }` with a variable assignment so we can wrap it
+  const transformed = userCode
+    .replace(/export\s+default\s+/, "const __userEntry = ")
+    .replace(
+      /export\s*\{([^}]*?\b(\w+)\b\s+as\s+default\b[^}]*)\}/,
+      (_match, _inner, identifier) =>
+        `const __userEntry = ${identifier};`,
+    );
 
   return `${transformed}
 
