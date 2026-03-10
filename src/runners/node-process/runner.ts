@@ -48,17 +48,6 @@ export class NodeProcessEnvRunner extends BaseEnvRunner {
     if (!this.#process) {
       return;
     }
-    await this._requestGracefulShutdown(
-      () => this.#process!.send({ event: "shutdown" }),
-      (resolve) => {
-        this.#process?.on("message", (message: any) => {
-          if (message.event === "exit") {
-            resolve();
-          }
-        });
-      },
-      () => this.#process?._exitCode != null,
-    );
     this.#process.removeAllListeners();
     this.#process.kill();
     this.#process = undefined;

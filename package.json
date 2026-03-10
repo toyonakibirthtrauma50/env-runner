@@ -54,7 +54,6 @@
     "obuild": "latest",
     "oxfmt": "latest",
     "oxlint": "latest",
-    "std-env": "4.0.0-rc.1",
     "typescript": "latest",
     "vitest": "latest"
   },

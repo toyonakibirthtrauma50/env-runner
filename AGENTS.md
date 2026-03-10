@@ -40,7 +40,7 @@ src/
 
 - **`src/vite.ts`** — Vite Environment API helpers: `createViteHotChannel()` (host-side HotChannel from runner RPC hooks) and `createViteTransport()` (worker-side ModuleRunner transport)
 - **`src/types.ts`** — Core interfaces: `EnvRunner`, `WorkerAddress`, `WorkerHooks`, `RunnerRPCHooks`, `RPCOptions`
-- **`src/common/base-runner.ts`** — `BaseEnvRunner` abstract class + `EnvRunnerData`: shared logic for all runners (fetch proxy with exponential backoff, upgrade, message dispatch, graceful shutdown, socket cleanup)
+- **`src/common/base-runner.ts`** — `BaseEnvRunner` abstract class + `EnvRunnerData`: shared logic for all runners (fetch proxy with exponential backoff, upgrade, message dispatch, socket cleanup)
 - **`src/common/worker-utils.ts`** — Shared utilities for built-in workers: `AppEntry` interface (with optional `websocket`, `upgrade`, and `ipc` hooks), `AppEntryIPC`/`AppEntryIPCContext` types, `resolveEntry()` to dynamically import user entry, `parseServerAddress()` to extract host/port from srvx server, `reloadEntryModule()` for cache-busted re-import with IPC teardown/re-init
 - **`src/runners/node-worker/runner.ts`** — `NodeWorkerEnvRunner` extends `BaseEnvRunner`: spawns Node.js Worker threads, data via `workerData`
 - **`src/runners/node-worker/worker.ts`** — Built-in srvx worker: reads `data.entry` from `workerData`, starts srvx server, reports address via `parentPort`
@@ -70,7 +70,7 @@ src/
 6. `waitForReady(timeout?)` returns a promise that resolves when the runner becomes ready (address received)
 7. `rpc(name, data?, opts?)` sends a request-response message over IPC (auto-generates ID, handles timeout, error propagation)
 8. `reloadModule(timeout?)` re-imports the entry module without restarting the worker/process (cache-busted `import()`, IPC teardown/re-init)
-9. `close()` sends shutdown event, waits for graceful exit (configurable via `ENV_RUNNER_SHUTDOWN_TIMEOUT`, default 5s, disabled in CI/test), then terminates
+9. `close()` immediately terminates the worker/process and cleans up sockets
 
 Subclasses implement abstract methods: `sendMessage()`, `_hasRuntime()`, `_closeRuntime()`, `_runtimeType()`, and runtime init.
 
@@ -246,7 +246,6 @@ const runner2 = new NodeProcessEnvRunner({
 - `crossws` — Cross-platform WebSocket hooks (used by built-in workers for `websocket` entry key)
 - `httpxy` — HTTP/WebSocket proxy
 - `srvx` — Universal server framework (used by built-in workers)
-- `std-env` — Environment detection (isCI, isTest)
 - `miniflare` — Cloudflare Workers simulator (optional peer dependency, required for `MiniflareEnvRunner`)
 
 > **See also:** [`.agents/MINIFLARE.md`](.agents/MINIFLARE.md) — Miniflare internals, `unsafeEvalBinding`, `unsafeModuleFallbackService`, service bindings patterns
@@ -256,7 +255,7 @@ const runner2 = new NodeProcessEnvRunner({
 
 - **Co-located runner + worker** — Each runner directory contains both `runner.ts` and `worker.ts` (except `self/` which has no worker). Runners default to their co-located worker via `import.meta.resolve("env-runner/runners/<name>/worker")` when `entry` is omitted
 - **Message-driven readiness** — Workers/processes post `{ address }` to signal ready state
-- **Graceful shutdown protocol** — Runner sends `{ event: "shutdown" }`, entry must close server and respond with `{ event: "exit" }`
+- **Immediate shutdown** — `close()` immediately terminates the worker/process (no graceful shutdown handshake)
 - **Data passing:** Worker threads use `workerData`, processes use `ENV_RUNNER_DATA` env var (JSON), self runner uses in-memory channel, miniflare runner uses in-memory `script` with `unsafeModuleFallbackService` for module resolution
 - **Socket cleanup** — `_closeSocket()` avoids deleting Windows named pipes and abstract sockets
 - **Custom inspect** — `[Symbol.for('nodejs.util.inspect.custom')]()` shows pending/ready/closed status

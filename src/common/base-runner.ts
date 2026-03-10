@@ -4,7 +4,6 @@ import type { RunnerMessageListener, EnvRunner, WorkerAddress, WorkerHooks } fro
 
 import { rm } from "node:fs/promises";
 import { proxyFetch, proxyUpgrade } from "httpxy";
-import { isCI, isTest } from "std-env";
 
 export interface EnvRunnerData {
   name?: string;
@@ -179,27 +178,6 @@ export abstract class BaseEnvRunner implements EnvRunner {
     this._address = undefined;
   }
 
-  protected async _requestGracefulShutdown(
-    sendShutdown: () => void,
-    listenForExit: (resolve: () => void) => void,
-    hasExited: () => boolean,
-  ) {
-    sendShutdown();
-    if (!hasExited() && !isTest && !isCI) {
-      await new Promise<void>((resolve) => {
-        const gracefulShutdownTimeoutMs =
-          Number.parseInt(process.env.ENV_RUNNER_SHUTDOWN_TIMEOUT || "", 10) || 5000;
-        const timeout = setTimeout(() => {
-          console.warn(`force closing node env runner ${this._runtimeType()}...`);
-          resolve();
-        }, gracefulShutdownTimeoutMs);
-        listenForExit(() => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
-    }
-  }
 
   // #endregion
 

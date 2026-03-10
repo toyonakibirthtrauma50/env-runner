@@ -51,9 +51,6 @@ importers:
       oxlint:
         specifier: latest
         version: 1.51.0
-      std-env:
-        specifier: 4.0.0-rc.1
-        version: 4.0.0-rc.1
       typescript:
         specifier: latest
         version: 5.9.3
@@ -1640,9 +1637,6 @@ packages:
   std-env@3.10.0:
     resolution: {integrity: sha512-5GS12FdOZNliM5mAOxFRg7Ir0pWz8MdpYm6AY6VPkGpbA7ZzmbzNcBJQ0GPvvyWgcY7QAhCgf9Uy89I03faLkg==}
 
-  std-env@4.0.0-rc.1:
-    resolution: {integrity: sha512-2gE+MEGsqvDEjl7LqbrCEB3Lo6+Pmt8ULCIsutKTesFBzSuNIkiWPSy65sa7WrlLebc9LcfnS5eyj69mutUp1A==}
-
   supports-color@10.2.2:
     resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
     engines: {node: '>=18'}
@@ -3105,8 +3099,6 @@ snapshots:
   stackback@0.0.2: {}
 
   std-env@3.10.0: {}
-
-  std-env@4.0.0-rc.1: {}
 
   supports-color@10.2.2: {}
 
