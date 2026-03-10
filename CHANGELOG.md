@@ -1,6 +1,23 @@
 # Changelog
 
 
+## v0.1.4
+
+[compare changes](https://github.com/unjs/env-runner/compare/v0.1.3...v0.1.4)
+
+### 🩹 Fixes
+
+- Windows imports ([e41f7af](https://github.com/unjs/env-runner/commit/e41f7af))
+- Import fresh on module reload ([bb997d0](https://github.com/unjs/env-runner/commit/bb997d0))
+
+### 🤖 CI
+
+- Windows and macos tests ([2c925bb](https://github.com/unjs/env-runner/commit/2c925bb))
+
+### ❤️ Contributors
+
+- Pooya Parsa ([@pi0](https://github.com/pi0))
+
 ## v0.1.3
 
 [compare changes](https://github.com/unjs/env-runner/compare/v0.1.2...v0.1.3)
